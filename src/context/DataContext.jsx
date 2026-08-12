@@ -1,111 +1,141 @@
-import React, { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
+import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import {
+  getProducts,
+  hasProducts,
+  saveProducts,
+  getTransactions,
+  saveTransactions,
+  getSettings,
+  hasSettings,
+  saveSettings,
+} from '../utils/storage';
+import { dummyProducts, DEFAULT_CATEGORIES, DEFAULT_SETTINGS } from '../data/dummyProducts';
+import { generateTransactionId } from '../utils/generateTransactionId';
 
 const DataContext = createContext(null);
 
-const STORAGE_KEY = 'qurmacel-pos-data';
-
-const initialProducts = [];
-
-const initialTransactions = [];
-
-const initialStoreProfile = {
-  nama: 'Qurmacel Store',
-  pemilik: 'Qurmacel',
-  alamat: 'Jl. Raya Utama No. 1, Kota Qurmacel',
-  telepon: '0812-3456-7890',
-  email: 'admin@qurmacel.store',
-  footerStruk: 'Terima kasih telah berbelanja di Qurmacel POS!',
-  npwp: '-',
-};
-
-const initialPrinterSettings = {
-  paperSize: '58', // '58' mm thermal | '80' mm thermal
-  autoPrint: false,
-};
-
-function loadSavedState() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return {
-      products: Array.isArray(parsed.products) ? parsed.products : initialProducts,
-      transactions: Array.isArray(parsed.transactions) ? parsed.transactions : initialTransactions,
-      storeProfile: parsed.storeProfile || initialStoreProfile,
-      printerSettings: parsed.printerSettings || initialPrinterSettings,
-    };
-  } catch (error) {
-    console.error('Gagal memuat data tersimpan:', error);
-    return null;
+function getInitialProducts() {
+  if (!hasProducts()) {
+    saveProducts(dummyProducts);
+    return dummyProducts;
   }
+  const stored = getProducts();
+  return Array.isArray(stored) ? stored : [];
 }
 
-function saveState(state) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch (error) {
-    console.error('Gagal menyimpan data:', error);
+function getInitialSettings() {
+  if (!hasSettings()) {
+    saveSettings(DEFAULT_SETTINGS);
+    return DEFAULT_SETTINGS;
   }
-}
-
-function formatRupiah(value) {
-  return new Intl.NumberFormat('id-ID', {
-    style: 'currency',
-    currency: 'IDR',
-    minimumFractionDigits: 0,
-  }).format(value);
+  return { ...DEFAULT_SETTINGS, ...getSettings() };
 }
 
 export function DataProvider({ children }) {
-  const saved = useMemo(() => loadSavedState(), []);
-  const [products, setProducts] = useState(saved?.products ?? initialProducts);
-  const [transactions, setTransactions] = useState(saved?.transactions ?? initialTransactions);
-  const [storeProfile, setStoreProfile] = useState(saved?.storeProfile ?? initialStoreProfile);
-  const [printerSettings, setPrinterSettings] = useState(saved?.printerSettings ?? initialPrinterSettings);
+  const [products, setProducts] = useState(getInitialProducts);
+  const [transactions, setTransactions] = useState(() => {
+    const stored = getTransactions();
+    return Array.isArray(stored) ? stored : [];
+  });
+  const [settings, setSettings] = useState(getInitialSettings);
 
-  useEffect(() => {
-    saveState({ products, transactions, storeProfile, printerSettings });
-  }, [products, transactions, storeProfile, printerSettings]);
+  const persistProducts = (next) => {
+    setProducts(next);
+    saveProducts(next);
+  };
 
-  const addProduct = useCallback((product) => {
-    setProducts((prev) => [{ ...product, id: Date.now() }, ...prev]);
-  }, []);
+  const persistTransactions = (next) => {
+    setTransactions(next);
+    saveTransactions(next);
+  };
 
-  const updateProduct = useCallback((updated) => {
-    setProducts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
-  }, []);
+  const addProduct = useCallback(
+    (product) => {
+      persistProducts([product, ...products]);
+    },
+    [products]
+  );
 
-  const deleteProduct = useCallback((id) => {
-    setProducts((prev) => prev.filter((p) => p.id !== id));
-  }, []);
+  const updateProduct = useCallback(
+    (updated) => {
+      persistProducts(products.map((p) => (p.id === updated.id ? updated : p)));
+    },
+    [products]
+  );
 
-  const addTransaction = useCallback((trx) => {
-    setTransactions((prev) => [trx, ...prev]);
-  }, []);
+  const deleteProduct = useCallback(
+    (id) => {
+      persistProducts(products.filter((p) => p.id !== id));
+    },
+    [products]
+  );
 
-  const updateStoreProfile = useCallback((profile) => {
-    setStoreProfile((prev) => ({ ...prev, ...profile }));
-  }, []);
+  const completeTransaction = useCallback(
+    (data) => {
+      const transaction = {
+        id: generateTransactionId(),
+        date: new Date().toISOString(),
+        ...data,
+      };
+      persistTransactions([transaction, ...transactions]);
+      const nextProducts = products.map((p) => {
+        const item = data.items.find((i) => i.productId === p.id);
+        if (!item) return p;
+        return { ...p, stock: Math.max(0, (Number(p.stock) || 0) - item.qty) };
+      });
+      persistProducts(nextProducts);
+      return transaction;
+    },
+    [products, transactions]
+  );
 
-  const updatePrinterSettings = useCallback((settings) => {
-    setPrinterSettings((prev) => ({ ...prev, ...settings }));
-  }, []);
+  const updateSettings = useCallback(
+    (partial) => {
+      const next = { ...settings, ...partial };
+      setSettings(next);
+      saveSettings(next);
+    },
+    [settings]
+  );
+
+  const resetData = useCallback(() => {
+    persistProducts(dummyProducts);
+    persistTransactions([]);
+    const defaults = DEFAULT_SETTINGS;
+    setSettings(defaults);
+    saveSettings(defaults);
+  }, [persistProducts, persistTransactions]);
+
+  const categories = useMemo(() => {
+    const fromProducts = products.map((p) => p.category).filter(Boolean);
+    return Array.from(new Set([...DEFAULT_CATEGORIES, ...fromProducts]));
+  }, [products]);
 
   const value = useMemo(
     () => ({
       products,
       transactions,
-      storeProfile,
-      printerSettings,
-      formatRupiah,
+      settings,
+      categories,
       addProduct,
       updateProduct,
       deleteProduct,
-      addTransaction,
-      updateStoreProfile,
-      updatePrinterSettings,
+      completeTransaction,
+      updateSettings,
+      resetData,
     }),
-    [products, transactions, storeProfile, printerSettings, addProduct, updateProduct, deleteProduct, addTransaction, updateStoreProfile, updatePrinterSettings]
+    [
+      products,
+      transactions,
+      settings,
+      categories,
+      addProduct,
+      updateProduct,
+      deleteProduct,
+      completeTransaction,
+      updateSettings,
+      resetData,
+    ]
   );
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
@@ -114,7 +144,7 @@ export function DataProvider({ children }) {
 export function useData() {
   const context = useContext(DataContext);
   if (!context) {
-    throw new Error('useData must be used within a DataProvider');
+    throw new Error('useData harus dipakai di dalam DataProvider');
   }
   return context;
 }

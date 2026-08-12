@@ -26,8 +26,32 @@ const paymentMethods = [
   { id: 'Transfer', label: 'Transfer', icon: Smartphone },
 ];
 
+function ProductCardImage({ foto, nama }) {
+  const [error, setError] = useState(false);
+
+  if (!foto || error) {
+    return (
+      <div className="flex aspect-square w-full items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 transition group-hover:bg-emerald-600 group-hover:text-white">
+        <ShoppingBag size={30} />
+      </div>
+    );
+  }
+  return (
+    <div className="aspect-square w-full overflow-hidden rounded-xl bg-slate-100">
+      <img
+        src={foto}
+        alt={nama}
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        onError={() => setError(true)}
+        className="h-full w-full object-cover transition duration-200 group-hover:scale-105"
+      />
+    </div>
+  );
+}
+
 export default function Transaksi() {
-  const { products, storeProfile, formatRupiah, addTransaction, printerSettings, updatePrinterSettings } = useData();
+  const { products, storeProfile, formatRupiah, formatAngka, addTransaction, printerSettings, updatePrinterSettings } = useData();
   const [search, setSearch] = useState('');
   const [cart, setCart] = useState([]);
   const [method, setMethod] = useState('Tunai');
@@ -145,24 +169,7 @@ export default function Transaksi() {
                   disabled={product.stok <= 0}
                   className="group relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {product.foto ? (
-                    <div className="h-24 w-full overflow-hidden rounded-xl bg-slate-100">
-                      <img
-                        src={product.foto}
-                        alt={product.nama}
-                        loading="lazy"
-                        referrerPolicy="no-referrer"
-                        onError={(e) => {
-                          e.currentTarget.closest('div').style.display = 'none';
-                        }}
-                        className="h-full w-full object-cover transition duration-200 group-hover:scale-105"
-                      />
-                    </div>
-                  ) : (
-                    <div className="flex h-24 w-full items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 transition group-hover:bg-emerald-600 group-hover:text-white">
-                      <ShoppingBag size={26} />
-                    </div>
-                  )}
+                  <ProductCardImage foto={product.foto} nama={product.nama} />
                   <p className="mt-3 line-clamp-2 text-sm font-semibold text-slate-800">
                     {product.nama}
                   </p>
@@ -425,10 +432,10 @@ export default function Transaksi() {
                     </p>
                     <div className="flex justify-between text-[10px] text-slate-600">
                       <span>
-                        {item.qty} x {formatRupiah(item.harga).replace('Rp', '').trim()}
+                        {item.qty} x {formatAngka(item.harga)}
                       </span>
                       <span className="font-semibold text-slate-800">
-                        {formatRupiah(item.harga * item.qty).replace('Rp', '').trim()}
+                        {formatAngka(item.harga * item.qty)}
                       </span>
                     </div>
                   </div>
@@ -439,20 +446,20 @@ export default function Transaksi() {
                 <div className="flex justify-between">
                   <span>Subtotal</span>
                   <span className="font-semibold text-slate-800">
-                    {formatRupiah(lastTransaction.items.reduce((s, i) => s + i.harga * i.qty, 0)).replace('Rp', '').trim()}
+                    {formatAngka(lastTransaction.items.reduce((s, i) => s + i.harga * i.qty, 0))}
                   </span>
                 </div>
                 <div className="mt-1.5 flex justify-between border-t border-dashed border-slate-300 pt-1.5 text-[13px] font-extrabold text-slate-900">
                   <span>TOTAL</span>
-                  <span>{formatRupiah(lastTransaction.total).replace('Rp', '').trim()}</span>
+                  <span>{formatAngka(lastTransaction.total)}</span>
                 </div>
                 <div className="mt-1.5 flex justify-between">
                   <span>Bayar</span>
-                  <span>{formatRupiah(lastTransaction.paid).replace('Rp', '').trim()}</span>
+                  <span>{formatAngka(lastTransaction.paid)}</span>
                 </div>
                 <div className="flex justify-between font-bold text-emerald-600">
                   <span>Kembali</span>
-                  <span>{formatRupiah(lastTransaction.change).replace('Rp', '').trim()}</span>
+                  <span>{formatAngka(lastTransaction.change)}</span>
                 </div>
               </div>
 

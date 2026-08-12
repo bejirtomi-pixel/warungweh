@@ -12,23 +12,38 @@ import {
   X,
   CheckCircle2,
   Image as ImageIcon,
+  Upload,
+  ImageOff,
+  Tags,
 } from 'lucide-react';
 import LogoWatermark from '../components/common/LogoWatermark';
 import { useData } from '../context/DataContext';
+import { fileToDataUrl } from '../utils/image';
 
-const categories = ['Semua', 'Minuman', 'Makanan', 'Cemilan'];
 const statusOptions = ['Semua', 'Aktif', 'Nonaktif'];
 
-const emptyForm = { nama: '', kode: '', kategori: 'Minuman', harga: '', stok: '', satuan: 'Pcs', status: 'Aktif', foto: '' };
+const emptyForm = {
+  nama: '',
+  kode: '',
+  kategori: 'Minuman',
+  hargaModal: '',
+  harga: '',
+  stok: '',
+  satuan: 'Pcs',
+  status: 'Aktif',
+  foto: '',
+};
 
 function ProductThumb({ src, size = 'md' }) {
   const [error, setError] = React.useState(false);
   const box =
-    size === 'sm' ? 'h-8 w-8 rounded-lg' : 'h-10 w-10 rounded-xl';
+    size === 'sm' ? 'h-9 w-9 rounded-lg' : 'h-11 w-11 rounded-xl';
 
   if (!src || error) {
     return (
-      <div className={`flex ${box} shrink-0 items-center justify-center bg-emerald-100 text-emerald-700`}>
+      <div
+        className={`flex ${box} shrink-0 items-center justify-center border border-slate-200 bg-gradient-to-br from-emerald-50 to-teal-50 text-emerald-700`}
+      >
         <Package size={size === 'sm' ? 15 : 18} />
       </div>
     );
@@ -40,13 +55,13 @@ function ProductThumb({ src, size = 'md' }) {
       loading="lazy"
       referrerPolicy="no-referrer"
       onError={() => setError(true)}
-      className={`${box} shrink-0 object-cover shadow-sm`}
+      className={`${box} shrink-0 border border-slate-200 bg-slate-100 object-cover shadow-sm`}
     />
   );
 }
 
 export default function Barang() {
-  const { products, formatRupiah, addProduct, updateProduct, deleteProduct } = useData();
+  const { products, categories, formatRupiah, addProduct, updateProduct, deleteProduct, addCategory, deleteCategory } = useData();
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('Semua');
   const [status, setStatus] = useState('Semua');
@@ -56,6 +71,9 @@ export default function Barang() {
   const [form, setForm] = useState(emptyForm);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [toast, setToast] = useState('');
+  const [previewError, setPreviewError] = useState(false);
+  const [categoryModalOpen, setCategoryModalOpen] = useState(false);
+  const [newCategory, setNewCategory] = useState('');
 
   const perPage = 8;
 
@@ -82,6 +100,7 @@ export default function Barang() {
   const handleOpenAdd = () => {
     setEditingId(null);
     setForm(emptyForm);
+    setPreviewError(false);
     setModalOpen(true);
   };
 
@@ -91,19 +110,45 @@ export default function Barang() {
       nama: product.nama,
       kode: product.kode,
       kategori: product.kategori,
+      hargaModal: product.hargaModal ?? '',
       harga: product.harga,
       stok: product.stok,
       satuan: product.satuan,
       status: product.status,
       foto: product.foto || '',
     });
+    setPreviewError(false);
     setModalOpen(true);
+  };
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      setForm((f) => ({ ...f, foto: dataUrl }));
+      setPreviewError(false);
+    } catch (err) {
+      showToast(err.message || 'Gagal mengunggah foto');
+    } finally {
+      e.target.value = '';
+    }
+  };
+
+  const handleAddCategory = (e) => {
+    e.preventDefault();
+    const trimmed = newCategory.trim();
+    if (!trimmed) return;
+    addCategory(trimmed);
+    setNewCategory('');
+    showToast(`Kategori "${trimmed}" ditambahkan`);
   };
 
   const handleSubmit = (e) => {
     e.preventDefault();
     const payload = {
       ...form,
+      hargaModal: Number(form.hargaModal) || 0,
       harga: Number(form.harga) || 0,
       stok: Number(form.stok) || 0,
     };
@@ -173,11 +218,20 @@ export default function Barang() {
                 }}
                 className="appearance-none rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-9 pr-8 text-sm font-medium text-slate-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100"
               >
+                <option>Semua</option>
                 {categories.map((c) => (
                   <option key={c}>{c}</option>
                 ))}
               </select>
             </div>
+            <button
+              onClick={() => setCategoryModalOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2.5 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
+              title="Tambah / kelola kategori"
+            >
+              <Tags size={15} />
+              Kategori
+            </button>
             <select
               value={status}
               onChange={(e) => {
@@ -198,13 +252,14 @@ export default function Barang() {
           <LogoWatermark size="lg" />
 
           <div className="relative z-10 overflow-x-auto">
-            <table className="w-full min-w-[820px] text-left text-sm">
+            <table className="w-full min-w-[980px] text-left text-sm">
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50/70 text-xs uppercase tracking-wide text-slate-500">
                   <th className="px-5 py-3.5 font-semibold">Kode</th>
                   <th className="px-5 py-3.5 font-semibold">Nama Barang</th>
                   <th className="px-5 py-3.5 font-semibold">Kategori</th>
-                  <th className="px-5 py-3.5 text-right font-semibold">Harga</th>
+                  <th className="px-5 py-3.5 text-right font-semibold">Harga Modal</th>
+                  <th className="px-5 py-3.5 text-right font-semibold">Harga Jual</th>
                   <th className="px-5 py-3.5 text-center font-semibold">Stok</th>
                   <th className="px-5 py-3.5 text-center font-semibold">Status</th>
                   <th className="px-5 py-3.5 text-right font-semibold">Aksi</th>
@@ -227,7 +282,10 @@ export default function Barang() {
                         {product.kategori}
                       </span>
                     </td>
-                    <td className="px-5 py-3.5 text-right font-semibold text-slate-800">
+                    <td className="px-5 py-3.5 text-right font-medium text-slate-500">
+                      {formatRupiah(product.hargaModal || 0)}
+                    </td>
+                    <td className="px-5 py-3.5 text-right font-bold text-emerald-700">
                       {formatRupiah(product.harga)}
                     </td>
                     <td className="px-5 py-3.5 text-center">
@@ -373,9 +431,9 @@ export default function Barang() {
                     onChange={(e) => setForm({ ...form, kategori: e.target.value })}
                     className={inputClass}
                   >
-                    <option>Minuman</option>
-                    <option>Makanan</option>
-                    <option>Cemilan</option>
+                    {categories.map((c) => (
+                      <option key={c}>{c}</option>
+                    ))}
                   </select>
                 </div>
                 <div>
@@ -388,6 +446,18 @@ export default function Barang() {
                   />
                 </div>
                 <div>
+                  <label className="mb-1.5 block text-xs font-semibold text-slate-600">Harga Modal (Rp)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.hargaModal}
+                    onChange={(e) => setForm({ ...form, hargaModal: e.target.value })}
+                    className={inputClass}
+                    placeholder="0"
+                  />
+                  <p className="mt-1 text-[11px] text-slate-400">Harga beli / modal.</p>
+                </div>
+                <div>
                   <label className="mb-1.5 block text-xs font-semibold text-slate-600">Harga Jual (Rp) *</label>
                   <input
                     required
@@ -398,6 +468,7 @@ export default function Barang() {
                     className={inputClass}
                     placeholder="0"
                   />
+                  <p className="mt-1 text-[11px] text-slate-400">Harga yang dibayar pelanggan.</p>
                 </div>
                 <div>
                   <label className="mb-1.5 block text-xs font-semibold text-slate-600">Stok *</label>
@@ -412,36 +483,56 @@ export default function Barang() {
                   />
                 </div>
                 <div className="sm:col-span-2">
-                  <label className="mb-1.5 block text-xs font-semibold text-slate-600">Link Foto Produk</label>
+                  <label className="mb-1.5 block text-xs font-semibold text-slate-600">Foto Produk</label>
                   <div className="flex items-start gap-3">
-                    <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                    <div className="relative flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
                       {form.foto ? (
-                        <img
-                          src={form.foto}
-                          alt="Preview foto produk"
-                          referrerPolicy="no-referrer"
-                          onError={(e) => {
-                            e.currentTarget.style.display = 'none';
-                          }}
-                          onLoad={(e) => {
-                            e.currentTarget.style.display = '';
-                          }}
-                          className="h-full w-full object-cover"
-                        />
+                        <>
+                          <img
+                            src={form.foto}
+                            alt="Preview foto produk"
+                            referrerPolicy="no-referrer"
+                            onError={() => setPreviewError(true)}
+                            onLoad={() => setPreviewError(false)}
+                            className="h-full w-full object-cover"
+                          />
+                          {previewError && (
+                            <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-100 text-slate-400">
+                              <ImageOff size={18} />
+                              <span className="mt-1 px-1 text-center text-[9px] leading-tight">
+                                Foto gagal dimuat
+                              </span>
+                            </div>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setForm({ ...form, foto: '' });
+                              setPreviewError(false);
+                            }}
+                            className="absolute right-1 top-1 rounded-full bg-red-500 p-1 text-white shadow transition hover:bg-red-600"
+                            title="Hapus foto"
+                          >
+                            <X size={11} />
+                          </button>
+                        </>
                       ) : (
-                        <ImageIcon size={20} className="text-slate-300" />
+                        <ImageIcon size={22} className="text-slate-300" />
                       )}
                     </div>
                     <div className="flex-1">
-                      <input
-                        type="url"
-                        value={form.foto}
-                        onChange={(e) => setForm({ ...form, foto: e.target.value })}
-                        className={inputClass}
-                        placeholder="https://contoh.com/gambar-produk.jpg"
-                      />
-                      <p className="mt-1 text-[11px] text-slate-400">
-                        Tempel URL gambar produk. Kosongkan jika tidak ada foto.
+                      <label className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-dashed border-emerald-300 bg-emerald-50 px-4 py-4 text-sm font-semibold text-emerald-700 transition hover:border-emerald-400 hover:bg-emerald-100">
+                        <Upload size={17} />
+                        Pilih Gambar dari Komputer
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={handleFileUpload}
+                        />
+                      </label>
+                      <p className="mt-1.5 text-[11px] leading-relaxed text-slate-400">
+                        Foto dikompres otomatis dan disimpan di perangkat sehingga selalu tampil.
                       </p>
                     </div>
                   </div>
@@ -517,6 +608,72 @@ export default function Barang() {
               >
                 Hapus
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Category manager modal */}
+      {categoryModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => setCategoryModalOpen(false)} />
+          <div className="relative z-10 w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+              <div>
+                <h3 className="text-base font-bold text-slate-800">Kelola Kategori</h3>
+                <p className="text-xs text-slate-500">Tambah atau hapus kategori barang</p>
+              </div>
+              <button
+                onClick={() => setCategoryModalOpen(false)}
+                className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="px-6 py-5">
+              <form onSubmit={handleAddCategory} className="mb-4 flex gap-2">
+                <input
+                  value={newCategory}
+                  onChange={(e) => setNewCategory(e.target.value)}
+                  placeholder="Nama kategori baru (cth: Snack)"
+                  className={`${inputClass} flex-1`}
+                />
+                <button
+                  type="submit"
+                  disabled={!newCategory.trim()}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-600/30 transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Plus size={16} />
+                  Tambah
+                </button>
+              </form>
+              <div className="max-h-64 space-y-2 overflow-y-auto">
+                {categories.map((c) => (
+                  <div
+                    key={c}
+                    className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50/60 px-4 py-2.5"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Tags size={15} className="text-emerald-600" />
+                      <span className="text-sm font-semibold text-slate-700">{c}</span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        deleteCategory(c);
+                        if (category === c) setCategory('Semua');
+                        showToast(`Kategori "${c}" dihapus`);
+                      }}
+                      className="rounded-lg p-1.5 text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                      title="Hapus kategori"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                ))}
+                {categories.length === 0 && (
+                  <p className="py-8 text-center text-sm text-slate-400">Belum ada kategori.</p>
+                )}
+              </div>
             </div>
           </div>
         </div>
