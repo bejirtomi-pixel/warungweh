@@ -11,6 +11,7 @@ import {
 } from '../utils/storage';
 import { dummyProducts, DEFAULT_CATEGORIES, DEFAULT_SETTINGS } from '../data/dummyProducts';
 import { generateTransactionId } from '../utils/generateTransactionId';
+import { formatCurrency, formatNumber } from '../utils/formatCurrency';
 
 const DataContext = createContext(null);
 
@@ -123,6 +124,8 @@ export function DataProvider({ children }) {
       completeTransaction,
       updateSettings,
       resetData,
+      formatRupiah: formatCurrency,
+      formatAngka: formatNumber,
     }),
     [
       products,
