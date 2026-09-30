@@ -1,5 +1,6 @@
 import React from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
+import { signOut } from 'firebase/auth';
 import {
   LayoutDashboard,
   Package,
@@ -7,20 +8,36 @@ import {
   BarChart3,
   Settings,
   Store,
+  BadgeInfo,
   X,
   LogOut,
 } from 'lucide-react';
 import Logo from '../common/Logo';
+import { auth } from '../../firebase';
+import { getSession, clearSession, clearSessionKicked } from '../../utils/storage';
 
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/barang', label: 'Barang', icon: Package },
   { to: '/transaksi', label: 'Transaksi', icon: ReceiptText },
   { to: '/laporan', label: 'Laporan', icon: BarChart3 },
+  { to: '/informasi-barang', label: 'Informasi Barang', icon: BadgeInfo },
   { to: '/pengaturan', label: 'Pengaturan', icon: Settings },
 ];
 
 export default function Sidebar({ collapsed, onClose, mobileOpen }) {
+  const navigate = useNavigate();
+  const session = getSession();
+  const nama = session?.nama || 'Admin';
+  const role = session?.role || 'Kasir';
+
+  const handleLogout = () => {
+    signOut(auth).catch(() => {});
+    clearSession();
+    clearSessionKicked();
+    navigate('/login', { replace: true });
+  };
+
   return (
     <>
       {mobileOpen && (
@@ -111,18 +128,18 @@ export default function Sidebar({ collapsed, onClose, mobileOpen }) {
         >
           <div className="flex items-center gap-3 rounded-xl bg-slate-50 px-3 py-2.5">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-sm font-bold text-white">
-              A
+              {nama.charAt(0).toUpperCase()}
             </div>
             {!collapsed && (
               <>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-slate-800">Admin</p>
-                  <p className="truncate text-xs text-slate-500">Kasir Utama</p>
+                  <p className="truncate text-sm font-semibold text-slate-800">{nama}</p>
+                  <p className="truncate text-xs text-slate-500">{role}</p>
                 </div>
                 <button
                   className="rounded-lg p-1.5 text-slate-400 transition hover:bg-red-50 hover:text-red-600"
                   title="Keluar"
-                  onClick={() => (window.location.href = '/login')}
+                  onClick={handleLogout}
                 >
                   <LogOut size={16} />
                 </button>

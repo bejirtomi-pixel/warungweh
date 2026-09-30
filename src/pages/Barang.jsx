@@ -15,8 +15,11 @@ import {
   Upload,
   ImageOff,
   Tags,
+  Barcode,
+  Printer,
 } from 'lucide-react';
 import LogoWatermark from '../components/common/LogoWatermark';
+import BarcodeLabel from '../components/common/BarcodeLabel';
 import { useData } from '../context/DataContext';
 import { fileToDataUrl } from '../utils/image';
 
@@ -74,16 +77,22 @@ export default function Barang() {
   const [previewError, setPreviewError] = useState(false);
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
   const [newCategory, setNewCategory] = useState('');
+  const [barcodeModal, setBarcodeModal] = useState(null);
+  const [barcodePrintLabel, setBarcodePrintLabel] = useState(null);
 
   const perPage = 8;
 
-  const filtered = useMemo(() => {
+const filtered = useMemo(() => {
     return products.filter((p) => {
+      const nama = p.nama || p.name || '';
+      const kode = p.kode || p.kode_barang || p.barcode || '';
+      const kategori = p.kategori || p.category || '';
+      const productStatus = (p.status || '').toLowerCase();
       const matchSearch =
-        p.nama.toLowerCase().includes(search.toLowerCase()) ||
-        p.kode.toLowerCase().includes(search.toLowerCase());
-      const matchCategory = category === 'Semua' || p.kategori === category;
-      const matchStatus = status === 'Semua' || p.status === status;
+        (nama + '').toLowerCase().includes(search.toLowerCase()) ||
+        (kode + '').toLowerCase().includes(search.toLowerCase());
+      const matchCategory = category === 'Semua' || (kategori + '').toLowerCase() === category.toLowerCase();
+      const matchStatus = status === 'Semua' || productStatus === status.toLowerCase();
       return matchSearch && matchCategory && matchStatus;
     });
   }, [products, search, category, status]);
@@ -146,17 +155,35 @@ export default function Barang() {
 
   const handleSubmit = (e) => {
     e.preventDefault();
+    const kode = form.kode || `BRG-${String(Date.now()).slice(-4)}`;
+    if (!editingId) {
+      const duplicate = products.some(
+        (p) => p.kode && p.kode.toLowerCase() === kode.toLowerCase()
+      );
+      if (duplicate) {
+        showToast(`Kode "${kode}" sudah digunakan produk lain!`);
+        return;
+      }
+    }
     const payload = {
       ...form,
+      kode,
       hargaModal: Number(form.hargaModal) || 0,
       harga: Number(form.harga) || 0,
       stok: Number(form.stok) || 0,
     };
     if (editingId) {
+      const duplicate = products.some(
+        (p) => p.id !== editingId && p.kode && p.kode.toLowerCase() === kode.toLowerCase()
+      );
+      if (duplicate) {
+        showToast(`Kode "${kode}" sudah digunakan produk lain!`);
+        return;
+      }
       updateProduct({ ...payload, id: editingId });
       showToast('Barang berhasil diperbarui');
     } else {
-      addProduct({ ...payload, kode: form.kode || `BRG-${String(Date.now()).slice(-4)}` });
+      addProduct(payload);
       setPage(1);
       showToast('Barang berhasil ditambahkan');
     }
@@ -167,6 +194,39 @@ export default function Barang() {
     deleteProduct(id);
     setConfirmDelete(null);
     showToast('Barang berhasil dihapus');
+  };
+
+  const handlePrintBarcode = (product) => {
+    setBarcodePrintLabel(product);
+  };
+
+  const handlePrintBarcodeConfirm = () => {
+    const printWindow = window.open('', '_blank', 'width=400,height=300');
+    if (!printWindow) {
+      showToast('Izinkan pop-up untuk mencetak barcode');
+      return;
+    }
+    const svgEl = document.getElementById('barcode-print-preview');
+    const svgData = svgEl ? svgEl.outerHTML : '';
+    printWindow.document.write(`<!doctype html><html><head><title>Cetak Barcode</title>
+<style>
+  @page { size: auto; margin: 5mm; }
+  body { font-family: monospace; text-align: center; margin: 0; padding: 0; }
+  .label { display: inline-block; margin: 3mm; text-align: center; page-break-inside: avoid; }
+  .name { font-size: 10px; font-weight: bold; margin-bottom: 2px; }
+  .price { font-size: 10px; margin-bottom: 2px; }
+  svg { max-width: 50mm; }
+</style></head><body>
+<div class="label">
+  <div class="name">${barcodePrintLabel.nama}</div>
+  ${svgData}
+  <div class="price">Rp ${Number(barcodePrintLabel.harga).toLocaleString('id-ID')}</div>
+</div>
+<script>window.onload = function(){ window.print(); window.close(); }<\/script>
+</body></html>`);
+    printWindow.document.close();
+    setBarcodePrintLabel(null);
+    showToast('Barcode dikirim ke printer');
   };
 
   const inputClass =
@@ -252,9 +312,9 @@ export default function Barang() {
           <LogoWatermark size="lg" />
 
           <div className="relative z-10 overflow-x-auto">
-            <table className="w-full min-w-[980px] text-left text-sm">
+            <table className="w-full min-w-[1000px] text-left text-sm">
               <thead>
-                <tr className="border-b border-slate-100 bg-slate-50/70 text-xs uppercase tracking-wide text-slate-500">
+                <tr className="border-b border-slate-200 bg-slate-100 text-xs uppercase tracking-wide text-slate-700">
                   <th className="px-5 py-3.5 font-semibold">Kode</th>
                   <th className="px-5 py-3.5 font-semibold">Nama Barang</th>
                   <th className="px-5 py-3.5 font-semibold">Kategori</th>
@@ -310,6 +370,13 @@ export default function Barang() {
                     </td>
                     <td className="px-5 py-3.5">
                       <div className="flex justify-end gap-1">
+                        <button
+                          onClick={() => handlePrintBarcode(product)}
+                          className="rounded-lg p-2 text-slate-400 transition hover:bg-violet-50 hover:text-violet-600"
+                          title="Cetak Barcode"
+                        >
+                          <Barcode size={16} />
+                        </button>
                         <button
                           onClick={() => handleOpenEdit(product)}
                           className="rounded-lg p-2 text-slate-400 transition hover:bg-sky-50 hover:text-sky-600"
@@ -674,6 +741,52 @@ export default function Barang() {
                   <p className="py-8 text-center text-sm text-slate-400">Belum ada kategori.</p>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Barcode print modal */}
+      {barcodePrintLabel && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => setBarcodePrintLabel(null)} />
+          <div className="relative z-10 w-full max-w-sm overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+              <div>
+                <h3 className="text-base font-bold text-slate-800">Cetak Barcode</h3>
+                <p className="text-xs text-slate-500">Preview barcode untuk {barcodePrintLabel.nama}</p>
+              </div>
+              <button
+                onClick={() => setBarcodePrintLabel(null)}
+                className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="flex flex-col items-center gap-3 px-6 py-6">
+              <p className="text-sm font-semibold text-slate-800">{barcodePrintLabel.nama}</p>
+              <div id="barcode-print-preview">
+                <BarcodeLabel value={barcodePrintLabel.kode} width={2} height={60} fontSize={12} />
+              </div>
+              <p className="text-sm font-bold text-emerald-600">
+                Rp {Number(barcodePrintLabel.harga).toLocaleString('id-ID')}
+              </p>
+              <p className="text-[11px] text-slate-400">Kode: {barcodePrintLabel.kode}</p>
+            </div>
+            <div className="flex gap-3 border-t border-slate-100 px-6 py-4">
+              <button
+                onClick={() => setBarcodePrintLabel(null)}
+                className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handlePrintBarcodeConfirm}
+                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-600 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-600/30 transition hover:bg-emerald-500"
+              >
+                <Printer size={15} />
+                Cetak
+              </button>
             </div>
           </div>
         </div>

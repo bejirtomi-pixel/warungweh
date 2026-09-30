@@ -145,15 +145,4 @@ export const dummyProducts = [
     unit: 'kg',
     image: IMAGE.sembako,
   },
-  {
-    id: 'PRD-VSC-0011',
-    barcode: '8997019300998',
-    name: 'VSC BS-1808',
-    category: 'Minuman',
-    purchasePrice: 5000,
-    sellingPrice: 8000,
-    stock: 20,
-    unit: 'botol',
-    image: IMAGE.minuman,
-  },
 ];

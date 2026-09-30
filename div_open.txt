@@ -1,0 +1,103 @@
+52:      <div className="flex aspect-square w-full items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 transition group-hover:bg-emerald-600 group-hover:text-white">
+59:    <div className="aspect-square w-full overflow-hidden rounded-xl bg-slate-100">
+700:      <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4">
+701:        <div
+708:        <div className="relative z-10 flex w-full max-w-md flex-col items-center">
+711:          <div className="mb-3 flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-bold text-emerald-600 shadow-xl">
+717:          <div className="mb-3 flex items-center gap-1 rounded-xl bg-white p-1 shadow-xl">
+742:          <div
+748:            <div className="flex flex-col items-center border-b border-dashed border-slate-300 px-3 pb-3 pt-5 text-center">
+766:            <div className="border-b border-dashed border-slate-300 px-3 py-2.5 text-[10px] leading-relaxed text-slate-600">
+768:              <div className="flex justify-between">
+778:              <div className="mt-0.5 flex justify-between">
+788:              <div className="mt-0.5 flex justify-between">
+798:              <div className="mt-0.5 flex justify-between">
+809:                <div className="mt-0.5 flex justify-between">
+823:                  <div className="mt-1 border-t border-dashed border-slate-200 pt-1">
+829:                  <div className="mt-0.5 flex justify-between text-[9px]">
+839:                  <div className="mt-0.5 flex justify-between text-[9px]">
+850:                    <div className="mt-0.5 flex justify-between text-[9px]">
+862:                    <div className="mt-0.5 flex justify-between text-[9px]">
+874:                    <div className="mt-0.5 flex justify-between text-[9px]">
+886:                    <div className="mt-0.5 flex justify-between text-[9px]">
+901:                    <div className="mt-0.5 flex justify-between text-[9px]">
+915:              <div className="mt-0.5 flex justify-between">
+927:                <div className="mt-0.5 flex justify-between">
+944:            <div className="border-b border-dashed border-slate-300 px-3 py-2.5">
+947:                  <div
+955:                    <div className="flex justify-between text-[10px] text-slate-600">
+974:            <div className="px-3 py-2.5 text-[10.5px] leading-relaxed text-slate-600">
+976:              <div className="flex justify-between">
+995:                <div className="mt-1 flex justify-between">
+1010:                <div className="mt-1 flex justify-between">
+1025:                  <div className="mt-1 flex justify-between text-sky-600">
+1040:              <div className="mt-1.5 flex justify-between border-t border-dashed border-slate-300 pt-1.5 text-[13px] font-extrabold text-slate-900">
+1052:              <div className="mt-1.5 flex justify-between">
+1065:                <div className="flex justify-between font-bold text-emerald-600">
+1080:            <div className="flex flex-col items-center border-t border-dashed border-slate-300 px-3 pb-4 pt-3 text-center">
+1093:          <div className="mt-3 flex w-full max-w-sm gap-3">
+1129:    <div className="px-4 py-6 lg:px-6">
+1130:      <div className="mx-auto max-w-7xl">
+1136:        <div className="mb-5">
+1146:        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_420px]">
+1152:          <div className="min-w-0">
+1155:            <div className="relative mb-3">
+1216:            <div className="relative mb-4">
+1234:            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-3">
+1290:                  <div className="mt-2 flex items-center justify-between">
+1312:                <div className="col-span-full flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white py-16 text-center">
+1330:          <div className="relative flex w-full min-h-[400px] max-h-[calc(100dvh-10rem)] self-start flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white/90 shadow-sm backdrop-blur-sm xl:sticky xl:top-20">
+1335:            <div className="relative z-10 flex items-center justify-between border-b border-slate-100 bg-white/95 px-5 py-4 backdrop-blur-sm">
+1336:              <div>
+1403:            <div className="relative z-10 min-h-0 flex-1 overflow-y-auto px-5 py-3">
+1405:                <div className="flex flex-col items-center justify-center py-10 text-center">
+1450:                        <div className="min-w-0 flex-1">
+1463:                        <div className="flex items-center gap-1">
+1550:            <div className="relative z-10 space-y-4 border-t border-slate-100 bg-white px-5 py-4">
+1554:                <div className="flex items-center gap-2">
+1577:              <div>
+1578:                <div className="mb-2 flex items-center gap-2">
+1589:                <div className="grid grid-cols-2 gap-2">
+1636:                <div className="space-y-3 rounded-xl border border-rose-200 bg-rose-50/50 p-4">
+1638:                  <div className="flex items-center gap-2 text-sm font-bold text-rose-700">
+1644:                  <div>
+1649:                    <div className="flex gap-2">
+1650:                      <div className="relative min-w-0 flex-1">
+1703:                  <div>
+1708:                    <div className="space-y-2">
+1710:                      <div className="flex items-center gap-2">
+1730:                      <div className="flex items-center gap-2">
+1750:                      <div className="flex items-start gap-2">
+1774:                  <div>
+1779:                    <div className="grid grid-cols-[1fr_110px] gap-2">
+1781:                      <div className="flex items-center gap-2">
+1819:                  <div className="flex items-start gap-2">
+1847:                <div>
+1887:              <div>
+1893:<div className="grid grid-cols-2 gap-3">
+1948:      <div className="grid grid-cols-2 gap-2">
+1979:                <div className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+2004:                  <div className="flex items-center gap-2">
+2015:                  <div className="mt-3 flex min-h-[120px] items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white p-4">
+2016:                    <div className="text-center">
+2039:                <div className="space-y-2">
+2040:                  <div>
+2045:                    <div className="flex items-center gap-2">
+2068:                      <div className="flex justify-between rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+2083:                      <div className="flex justify-between rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+2103:              <div className="space-y-2 border-t border-dashed border-slate-200 pt-3">
+2105:                <div className="flex items-center justify-between text-sm text-slate-500">
+2117:                <div className="flex items-center justify-between gap-3 text-sm text-slate-500">
+2136:                <div className="flex items-center justify-between gap-3 text-sm text-slate-500">
+2157:                    <div className="flex items-center justify-between text-sm text-slate-500">
+2173:                <div className="flex items-center justify-between border-t border-dashed border-slate-200 pt-3">
+2189:                <div
+2198:                  <div className="flex items-center justify-between">
+2242:        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+2244:          <div
+2254:          <div className="relative z-10 w-full max-w-sm overflow-hidden rounded-2xl bg-white shadow-2xl">
+2256:            <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+2320:              <div>
+2341:              <div>
+2361:              <div>
+2382:              <div className="flex justify-end gap-3 border-t border-slate-100 pt-4">

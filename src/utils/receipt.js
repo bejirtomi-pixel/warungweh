@@ -77,7 +77,9 @@ ${buildStyle(paperSize)}
   ${line('Waktu', escapeHtml(transaction.tanggal), 'muted')}
   ${line('Kasir', escapeHtml(transaction.kasir), 'muted')}
   ${line('Pelanggan', escapeHtml(transaction.customer), 'muted')}
+  ${transaction.tableName ? line('Meja', escapeHtml(transaction.tableName), 'muted') : ''}
   ${line('Metode', escapeHtml(transaction.metode), 'muted')}
+  ${transaction.paymentStatus ? line('Status', transaction.paymentStatus === 'Lunas' ? 'LUNAS' : transaction.paymentStatus === 'Hutang' ? 'HUTANG' : 'BELUM LUNAS', 'muted') : ''}
   ${sep}
   ${itemsHTML}
   ${sep}
@@ -179,9 +181,15 @@ ${buildStyle(paperSize)}
     });
   }
   window.addEventListener('load', printReceipt);
-  window.addEventListener('afterprint', function () {
-    setTimeout(function () { window.close(); }, 200);
-  });
+ window.addEventListener('afterprint', function () {
+  setTimeout(function () {
+    try {
+      window.close();
+    } catch (error) {
+      console.warn('Gagal menutup jendela struk:', error);
+    }
+  }, 300);
+});
 <\/script>
 </body>
 </html>`;

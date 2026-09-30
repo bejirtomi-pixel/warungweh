@@ -11,14 +11,23 @@ import {
   CheckCircle2,
   FileText,
   Info,
+  Table2,
+  Plus,
+  Trash2,
+  Upload,
+  ImageOff,
+  X,
+  QrCode,
 } from 'lucide-react';
 import Logo from '../components/common/Logo';
 import LogoWatermark from '../components/common/LogoWatermark';
 import { useData } from '../context/DataContext';
 import { openTestReceipt } from '../utils/receipt';
+import { getNotifPrefs, saveNotifPrefs } from '../utils/storage';
 
 const tabs = [
   { id: 'profil', label: 'Profil & Branding', icon: Store },
+  { id: 'meja', label: 'Meja & QRIS', icon: Table2 },
   { id: 'notifikasi', label: 'Notifikasi', icon: Bell },
   { id: 'keamanan', label: 'Keamanan', icon: Shield },
   { id: 'printer', label: 'Printer Struk', icon: Printer },
@@ -40,20 +49,32 @@ function Toggle({ enabled, onChange, label, desc }) {
 }
 
 export default function Pengaturan() {
-  const { storeProfile, updateStoreProfile, printerSettings, updatePrinterSettings } = useData();
+  const { storeProfile, updateStoreProfile, printerSettings, updatePrinterSettings, tables, addTable, updateTable, deleteTable } = useData();
   const [activeTab, setActiveTab] = useState('profil');
   const [toast, setToast] = useState('');
-  const [form, setForm] = useState(storeProfile);
+  const [form, setForm] = useState(storeProfile || { nama: '', pemilik: '', alamat: '', telepon: '', email: '', footerStruk: '' });
 
   const paperSize = printerSettings.paperSize || '58';
 
-  const [toggles, setToggles] = useState({
-    notifTransaksi: true,
-    notifStok: true,
-    notifPromo: false,
-    printerThermal: true,
-    autoCetak: printerSettings.autoPrint,
+  const [toggles, setTogglesState] = useState(() => {
+    const prefs = getNotifPrefs();
+    return {
+      notifTransaksi: prefs.notifTransaksi ?? true,
+      notifStok: prefs.notifStok ?? true,
+      notifPromo: prefs.notifPromo ?? false,
+      printerThermal: true,
+      autoCetak: printerSettings?.autoPrint ?? true,
+    };
   });
+
+  const setToggles = (newVal) => {
+    setTogglesState(newVal);
+    saveNotifPrefs({
+      notifTransaksi: newVal.notifTransaksi,
+      notifStok: newVal.notifStok,
+      notifPromo: newVal.notifPromo,
+    });
+  };
 
   const [paymentEnabled, setPaymentEnabled] = useState({
     Tunai: true,
@@ -61,6 +82,11 @@ export default function Pengaturan() {
     Transfer: true,
     'Kartu Debit': false,
   });
+
+  const [tableForm, setTableForm] = useState({ name: '' });
+  const [editingTable, setEditingTable] = useState(null);
+  const [tableModalOpen, setTableModalOpen] = useState(false);
+  const [previewTable, setPreviewTable] = useState(null);
 
   const showToast = (msg) => {
     setToast(msg);
@@ -71,6 +97,64 @@ export default function Pengaturan() {
     e.preventDefault();
     updateStoreProfile(form);
     showToast('Profil toko berhasil disimpan');
+  };
+
+  const handleAddTable = (e) => {
+    e.preventDefault();
+    const name = tableForm.name.trim();
+    if (!name) return;
+    addTable({ name });
+    setTableForm({ name: '' });
+    setTableModalOpen(false);
+    showToast(`Meja "${name}" berhasil ditambahkan`);
+  };
+
+  const handleEditTable = (table) => {
+    setEditingTable(table);
+    setTableForm({ name: table.name });
+    setTableModalOpen(true);
+  };
+
+  const handleUpdateTable = (e) => {
+    e.preventDefault();
+    const name = tableForm.name.trim();
+    if (!name || !editingTable) return;
+    updateTable({ id: editingTable.id, name });
+    setEditingTable(null);
+    setTableForm({ name: '' });
+    setTableModalOpen(false);
+    showToast(`Meja berhasil diperbarui`);
+  };
+
+  const handleToggleTableActive = (table) => {
+    updateTable({ id: table.id, active: !table.active });
+    showToast(`Meja "${table.name}" ${table.active ? 'dinonaktifkan' : 'diaktifkan'}`);
+  };
+
+  const handleDeleteTable = (table) => {
+    deleteTable(table.id);
+    showToast(`Meja "${table.name}" dihapus`);
+  };
+
+  const handleQrisUpload = (table, e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showToast('File harus berupa gambar');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      updateTable({ id: table.id, qrisImage: reader.result });
+      showToast(`QRIS "${table.name}" berhasil diunggah`);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const handleRemoveQris = (table) => {
+    updateTable({ id: table.id, qrisImage: '' });
+    showToast(`QRIS "${table.name}" dihapus`);
   };
 
   const inputClass =
@@ -207,6 +291,241 @@ export default function Pengaturan() {
                     </button>
                   </div>
                 </form>
+              )}
+
+              {activeTab === 'meja' && (
+                <div className="space-y-5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-700">Daftar Meja</p>
+                      <p className="text-xs text-slate-500">Kelola meja dan QRIS pembayaran per meja</p>
+                    </div>
+                    <button
+                      onClick={() => { setEditingTable(null); setTableForm({ name: '' }); setTableModalOpen(true); }}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-600/30 transition hover:bg-emerald-500"
+                    >
+                      <Plus size={15} />
+                      Tambah Meja
+                    </button>
+                  </div>
+
+                  {tables.length === 0 && (
+                    <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 py-12 text-center">
+                      <Table2 size={32} className="text-slate-300" />
+                      <p className="mt-3 text-sm font-semibold text-slate-600">Belum ada meja</p>
+                      <p className="text-xs text-slate-400">Klik "Tambah Meja" untuk membuat meja baru</p>
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    {tables.map((table) => (
+                      <div
+                        key={table.id}
+                        className={`rounded-2xl border p-4 transition ${
+                          table.active ? 'border-slate-200 bg-white' : 'border-slate-100 bg-slate-50 opacity-60'
+                        }`}
+                      >
+                        <div className="flex items-start gap-4">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
+                            <Table2 size={20} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm font-bold text-slate-800">{table.name}</p>
+                              {!table.active && (
+                                <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+                                  Nonaktif
+                                </span>
+                              )}
+                              {table.qrisImage && (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                                  <QrCode size={10} />
+                                  QRIS Aktif
+                                </span>
+                              )}
+                              {!table.qrisImage && (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                                  QRIS Belum Diunggah
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-0.5 text-[11px] text-slate-400">
+                              Dibuat: {new Date(table.createdAt).toLocaleDateString('id-ID')}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => handleToggleTableActive(table)}
+                              className="rounded-lg p-2 text-slate-400 transition hover:bg-sky-50 hover:text-sky-600"
+                              title={table.active ? 'Nonaktifkan' : 'Aktifkan'}
+                            >
+                              {table.active ? <ToggleRight size={18} /> : <ToggleLeft size={18} />}
+                            </button>
+                            <button
+                              onClick={() => handleEditTable(table)}
+                              className="rounded-lg p-2 text-slate-400 transition hover:bg-sky-50 hover:text-sky-600"
+                              title="Edit nama meja"
+                            >
+                              <Store size={15} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteTable(table)}
+                              className="rounded-lg p-2 text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+                              title="Hapus meja"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* QRIS section */}
+                        <div className="mt-3 border-t border-slate-100 pt-3">
+                          <p className="mb-2 text-xs font-semibold text-slate-600">QRIS Pembayaran</p>
+                          {table.qrisImage ? (
+                            <div className="flex items-start gap-3">
+                              <button
+                                onClick={() => setPreviewTable(table)}
+                                className="shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-white p-1 shadow-sm transition hover:shadow-md"
+                              >
+                                <img
+                                  src={table.qrisImage}
+                                  alt={`QRIS ${table.name}`}
+                                  className="h-20 w-20 object-contain"
+                                />
+                              </button>
+                              <div className="flex-1 space-y-2">
+                                <p className="text-xs text-slate-500">QRIS sudah diunggah. Pelanggan akan memindai QR ini saat pembayaran.</p>
+                                <div className="flex gap-2">
+                                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50">
+                                    <Upload size={12} />
+                                    Ganti
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      className="hidden"
+                                      onChange={(e) => handleQrisUpload(table, e)}
+                                    />
+                                  </label>
+                                  <button
+                                    onClick={() => handleRemoveQris(table)}
+                                    className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-50"
+                                  >
+                                    <Trash2 size={12} />
+                                    Hapus
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col items-center gap-3 rounded-xl border-2 border-dashed border-amber-300 bg-amber-50/50 py-6 text-center">
+                              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-amber-100 text-amber-600">
+                                <ImageOff size={22} />
+                              </div>
+                              <div>
+                                <p className="text-xs font-semibold text-amber-700">QRIS belum tersedia untuk meja ini</p>
+                                <p className="text-[11px] text-amber-500">Unggah gambar QRIS asli dari merchant</p>
+                              </div>
+                              <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-amber-500 px-4 py-2 text-xs font-bold text-white shadow-md transition hover:bg-amber-600">
+                                <Upload size={13} />
+                                Upload QRIS
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  className="hidden"
+                                  onChange={(e) => handleQrisUpload(table, e)}
+                                />
+                              </label>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Table add/edit modal */}
+                  {tableModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => { setTableModalOpen(false); setEditingTable(null); }} />
+                      <div className="relative z-10 w-full max-w-sm overflow-hidden rounded-2xl bg-white shadow-2xl">
+                        <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+                          <h3 className="text-base font-bold text-slate-800">
+                            {editingTable ? 'Edit Meja' : 'Tambah Meja'}
+                          </h3>
+                          <button onClick={() => { setTableModalOpen(false); setEditingTable(null); }} className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100">
+                            <X size={18} />
+                          </button>
+                        </div>
+                        <form onSubmit={editingTable ? handleUpdateTable : handleAddTable} className="space-y-4 px-6 py-5">
+                          <div>
+                            <label className="mb-1.5 block text-xs font-semibold text-slate-600">Nama Meja *</label>
+                            <input
+                              required
+                              value={tableForm.name}
+                              onChange={(e) => setTableForm({ name: e.target.value })}
+                              placeholder="cth: Meja 1"
+                              className={inputClass}
+                            />
+                          </div>
+                          <div className="flex justify-end gap-3 border-t border-slate-100 pt-4">
+                            <button type="button" onClick={() => { setTableModalOpen(false); setEditingTable(null); }} className="rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-100">
+                              Batal
+                            </button>
+                            <button type="submit" className="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-600/30 transition hover:bg-emerald-500">
+                              {editingTable ? 'Simpan' : 'Tambah'}
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* QRIS preview modal */}
+                  {previewTable && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => setPreviewTable(null)} />
+                      <div className="relative z-10 w-full max-w-sm overflow-hidden rounded-2xl bg-white shadow-2xl">
+                        <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+                          <h3 className="text-base font-bold text-slate-800">QRIS {previewTable.name}</h3>
+                          <button onClick={() => setPreviewTable(null)} className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100">
+                            <X size={18} />
+                          </button>
+                        </div>
+                        <div className="flex flex-col items-center gap-4 px-6 py-8">
+                          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+                            <img
+                              src={previewTable.qrisImage}
+                              alt={`QRIS ${previewTable.name}`}
+                              className="h-56 w-56 object-contain"
+                            />
+                          </div>
+                          <p className="text-sm font-bold text-slate-800">{previewTable.name}</p>
+                          <p className="text-xs text-slate-400">Scan QR ini untuk membayar di {previewTable.name}</p>
+                        </div>
+                        <div className="border-t border-slate-100 px-6 py-4">
+                          <button
+                            onClick={() => setPreviewTable(null)}
+                            className="w-full rounded-xl bg-slate-100 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-200"
+                          >
+                            Tutup
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                    <Info size={16} className="mt-0.5 shrink-0 text-amber-600" />
+                    <div className="text-[11px] leading-relaxed text-amber-800">
+                      <p className="font-bold">Tips QRIS per meja:</p>
+                      <ol className="mt-1 list-decimal space-y-0.5 pl-4">
+                        <li>Gunakan QRIS asli dari merchant/payment provider Anda.</li>
+                        <li>Unggah gambar QRIS sebagai foto/template dari provider.</li>
+                        <li>Setiap meja bisa memiliki QRIS yang berbeda jika diperlukan.</li>
+                        <li>QRIS palsu tidak akan bisa menerima pembayaran nyata.</li>
+                      </ol>
+                    </div>
+                  </div>
+                </div>
               )}
 
               {activeTab === 'notifikasi' && (

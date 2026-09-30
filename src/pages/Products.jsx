@@ -25,11 +25,14 @@ export default function Products() {
   const filtered = useMemo(() => {
     const keyword = search.trim().toLowerCase();
     return products.filter((p) => {
+      const name = p.nama || p.name || '';
+      const kode = p.kode || p.barcode || '';
+      const category = p.kategori || p.category || '';
       const matchSearch =
         !keyword ||
-        p.name.toLowerCase().includes(keyword) ||
-        String(p.barcode || '').toLowerCase().includes(keyword);
-      const matchCategory = category === 'Semua' || p.category === category;
+        (name + '').toLowerCase().includes(keyword) ||
+        (kode + '').toLowerCase().includes(keyword);
+      const matchCategory = category === 'Semua' || (category + '').toLowerCase() === category.toLowerCase();
       return matchSearch && matchCategory;
     });
   }, [products, search, category]);

@@ -1,8 +1,13 @@
 import React from 'react';
 import { Menu, Search, Bell, ChevronDown } from 'lucide-react';
 import Logo from '../common/Logo';
+import { getSession } from '../../utils/storage';
 
 export default function Navbar({ collapsed, onToggleCollapse, onOpenMobile }) {
+  const session = getSession();
+  const nama = session?.nama || 'Admin';
+  const role = session?.role || 'Kasir';
+
   return (
     <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-slate-200 bg-white/90 px-4 backdrop-blur-md lg:px-6 no-print">
       {/* Mobile menu button */}
@@ -58,11 +63,11 @@ export default function Navbar({ collapsed, onToggleCollapse, onOpenMobile }) {
       {/* User */}
       <button className="flex items-center gap-2 rounded-xl border border-slate-200 py-1.5 pl-1.5 pr-2.5 transition hover:bg-slate-50">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-600 text-xs font-bold text-white">
-          A
+          {nama.charAt(0).toUpperCase()}
         </div>
         <div className="hidden text-left sm:block">
-          <p className="text-sm font-semibold leading-tight text-slate-800">Admin</p>
-          <p className="text-xs leading-tight text-slate-500">Kasir Utama</p>
+          <p className="text-sm font-semibold leading-tight text-slate-800">{nama}</p>
+          <p className="text-xs leading-tight text-slate-500">{role}</p>
         </div>
         <ChevronDown size={16} className="text-slate-400" />
       </button>

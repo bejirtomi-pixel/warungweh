@@ -15,7 +15,7 @@ import { useData } from '../context/DataContext';
 
 export default function ProfilToko() {
   const { storeProfile, updateStoreProfile } = useData();
-  const [form, setForm] = useState(storeProfile);
+  const [form, setForm] = useState(storeProfile || { nama: '', alamat: '', telepon: '', footerStruk: '' });
   const [toast, setToast] = useState('');
 
   const showToast = (msg) => {
