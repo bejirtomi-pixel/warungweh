@@ -89,12 +89,12 @@ export default function Login() {
     let cancelled = false;
     let unsub = () => {};
     try {
-      unsub = onAuthStateChanged(auth, (user) => {
-        if (cancelled) return;
-        if (user && ALLOWED_UID && user.uid === ALLOWED_UID) {
-          navigate('/dashboard', { replace: true });
-        }
-      });
+     unsub = onAuthStateChanged(auth, (user) => {
+  if (cancelled) return;
+  if (user) {
+    navigate('/dashboard', { replace: true });
+  }
+});
     } catch {
       // abaikan; jika auth tidak tersedia, tetap tampilkan form login
     }
@@ -183,17 +183,6 @@ export default function Login() {
       // Von Verifikasi identitas dilakukan oleh Google + Firebase Auth.
       const result = await signInWithPopup(auth, googleProvider);
       const user = result.user;
-
-      // Sama seperti email/password: hanya akun Qurma (UID cocok) yang boleh masuk.
-      const isAllowed = Boolean(ALLOWED_UID) && user.uid === ALLOWED_UID;
-
-      if (!isAllowed) {
-        await signOut(auth).catch(() => {});
-        setError(
-          'Akun Google ini belum terhubung ke akun Qurma. Masuk dulu dengan email/password, lalu hubungkan di menu Pengaturan → Keamanan.'
-        );
-        return;
-      }
 
       const session = buildSession(user.email || '');
       session.uid = user.uid;
@@ -368,7 +357,7 @@ export default function Login() {
 
           <p className="mt-5 flex items-center justify-center gap-1.5 text-center text-[11px] text-slate-500">
             <ShieldCheck size={13} />
-            Hanya akun resmi Qurmacel POS yang dapat masuk
+            Login aman menggunakan Firebase Authentication
           </p>
         </div>
 
