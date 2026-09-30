@@ -127,25 +127,18 @@ export default function Login() {
       // Ingat Saya = false → persistensi sesi (hilang saat tab/browser ditutup).
       await setPersistence(auth, remember ? browserLocalPersistence : browserSessionPersistence);
 
-      // Password diverifikasi oleh Firebase Authentication.
-      const cred = await signInWithEmailAndPassword(auth, trimmed, password);
+    // Password diverifikasi oleh Firebase Authentication.
+const cred = await signInWithEmailAndPassword(auth, trimmed, password);
 
-      // Hanya satu akun Qurma yang diizinkan masuk.
-      const isAllowed = Boolean(ALLOWED_UID) && cred.user.uid === ALLOWED_UID;
+const user = cred.user;
 
-      if (!isAllowed) {
-        await signOut(auth).catch(() => {});
-        setError('Akun ini tidak diizinkan masuk ke Qurmacel POS.');
-        setLoading(false);
-        return;
-      }
+const session = buildSession(user.email || trimmed);
+session.uid = user.uid;
+session.nama = user.displayName || session.nama;
 
-      const session = buildSession(cred.user.email || trimmed);
-      session.uid = cred.user.uid;
-
-      saveSession(session, remember);
-      clearSessionKicked();
-      navigate('/dashboard', { replace: true });
+saveSession(session, remember);
+clearSessionKicked();
+navigate('/dashboard', { replace: true });
     } catch (err) {
       setError(firebaseErrorMessage(err.code || ''));
     } finally {

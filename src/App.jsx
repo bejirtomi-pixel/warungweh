@@ -19,7 +19,10 @@ import NotFound from './pages/NotFound';
 // Gerbang autentikasi berbasis Firebase Auth.
 // Hanya pengguna yang login ANDA memiliki UID akun Qurma yang diizinkan masuk.
 function RequireAuth({ children }) {
-  const [state, setState] = React.useState({ ready: false, allowed: false });
+  const [state, setState] = React.useState({
+    ready: false,
+    allowed: false,
+  });
 
   React.useEffect(() => {
     let cancelled = false;
@@ -30,21 +33,24 @@ function RequireAuth({ children }) {
         if (cancelled) return;
 
         if (!user) {
-          setState({ ready: true, allowed: false });
+          setState({
+            ready: true,
+            allowed: false,
+          });
           return;
         }
 
-        const allowed = Boolean(ALLOWED_UID) && user.uid === ALLOWED_UID;
-
-        // Akun lain yang kebetulan tervalidasi Firebase tetap ditolak.
-        if (!allowed) {
-          signOut(auth).catch(() => {});
-        }
-
-        setState({ ready: true, allowed });
+        // Semua user yang berhasil login melalui Firebase diperbolehkan masuk.
+        setState({
+          ready: true,
+          allowed: true,
+        });
       });
     } catch {
-      setState({ ready: true, allowed: false });
+      setState({
+        ready: true,
+        allowed: false,
+      });
     }
 
     return () => {
@@ -53,9 +59,13 @@ function RequireAuth({ children }) {
     };
   }, []);
 
-  // Tunggu status awal auth selesai agar tidak terjadi flash-redirect.
+  // Tunggu status autentikasi Firebase selesai.
   if (!state.ready) return null;
-  if (!state.allowed) return <Navigate to="/login" replace />;
+
+  if (!state.allowed) {
+    return <Navigate to="/login" replace />;
+  }
+
   return children;
 }
 
