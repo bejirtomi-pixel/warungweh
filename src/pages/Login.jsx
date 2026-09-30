@@ -173,31 +173,34 @@ export default function Login() {
     }
   };
 
-  const handleGoogle = async () => {
-    setError('');
-    setSuccess('');
-    setGoogleLoading(true);
-    try {
-      await setPersistence(auth, remember ? browserLocalPersistence : browserSessionPersistence);
+const handleGoogle = async () => {
+  setError('');
+  setSuccess('');
+  setGoogleLoading(true);
 
-      // Von Verifikasi identitas dilakukan oleh Google + Firebase Auth.
-      const result = await signInWithPopup(auth, googleProvider);
-      const user = result.user;
+  try {
+    await setPersistence(
+      auth,
+      remember ? browserLocalPersistence : browserSessionPersistence
+    );
 
-      const session = buildSession(user.email || '');
-      session.uid = user.uid;
-      session.nama = user.displayName || session.nama;
+    // Verifikasi identitas dilakukan oleh Google + Firebase Auth.
+    const result = await signInWithPopup(auth, googleProvider);
+    const user = result.user;
 
-      saveSession(session, remember);
-      clearSessionKicked();
-      navigate('/dashboard', { replace: true });
-    } catch (err) {
-      setError(firebaseErrorMessage(err.code || ''));
-    } finally {
-      setGoogleLoading(false);
-    }
-  };
+    const session = buildSession(user.email || '');
+    session.uid = user.uid;
+    session.nama = user.displayName || session.nama;
 
+    saveSession(session, remember);
+    clearSessionKicked();
+    navigate('/dashboard', { replace: true });
+  } catch (err) {
+    setError(firebaseErrorMessage(err.code || ''));
+  } finally {
+    setGoogleLoading(false);
+  }
+};
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-950 px-4 py-10">
       {/* Decorative blobs */}
