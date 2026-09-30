@@ -10,6 +10,7 @@ import {
   ShieldCheck,
   AlertCircle,
   Loader2,
+  CheckCircle2,
 } from 'lucide-react';
 import {
   signInWithEmailAndPassword,
@@ -18,10 +19,13 @@ import {
   browserLocalPersistence,
   browserSessionPersistence,
   onAuthStateChanged,
+  sendPasswordResetEmail,
+  signInWithPopup,
 } from 'firebase/auth';
 import { auth } from '../firebase';
-import { ALLOWED_UID } from '../config/auth';
+import { ALLOWED_UID, googleProvider } from '../config/auth';
 import Logo from '../components/common/Logo';
+import GoogleIcon from '../components/common/GoogleIcon';
 import { saveSession, clearSessionKicked } from '../utils/storage';
 
 function firebaseErrorMessage(code) {
@@ -38,6 +42,14 @@ function firebaseErrorMessage(code) {
       return 'Terlalu banyak percobaan. Tunggu sebentar lalu coba lagi.';
     case 'auth/network-request-failed':
       return 'Tidak ada koneksi internet. Coba lagi.';
+    case 'auth/operation-not-allowed':
+      return 'Metode login ini belum diaktifkan di Firebase Console.';
+    case 'auth/popup-blocked':
+      return 'Popup login diblokir browser. Izinkan popup lalu coba lagi.';
+    case 'auth/popup-closed-by-user':
+      return 'Jendela login Google ditutup.';
+    case 'auth/account-exists-with-different-credential':
+      return 'Akun dengan email ini sudah memakai metode login lain. Masuk dengan email/password lalu hubungkan Google di Pengaturan → Keamanan.';
     default:
       return 'Gagal masuk. Periksa koneksi internet lalu coba lagi.';
   }
@@ -66,7 +78,9 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [remember, setRemember] = useState(true);
 
   // Jika pengguna yang sah sudah terautentikasi (persistensi Firebase),
@@ -105,6 +119,7 @@ export default function Login() {
     }
 
     setError('');
+    setSuccess('');
     setLoading(true);
 
     try {
@@ -135,6 +150,62 @@ export default function Login() {
       setError(firebaseErrorMessage(err.code || ''));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    const trimmed = email.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      setError('Isi alamat email akun Qurma terlebih dahulu, lalu klik "Lupa password?".');
+      setSuccess('');
+      return;
+    }
+    setError('');
+    setSuccess('');
+    setLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, trimmed);
+      setSuccess('Jika email tersebut terdaftar, tautan reset password telah dikirim. Cek kotak masuk Anda.');
+    } catch (err) {
+      setError(firebaseErrorMessage(err.code || ''));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogle = async () => {
+    setError('');
+    setSuccess('');
+    setGoogleLoading(true);
+    try {
+      await setPersistence(auth, remember ? browserLocalPersistence : browserSessionPersistence);
+
+      // Von Verifikasi identitas dilakukan oleh Google + Firebase Auth.
+      const result = await signInWithPopup(auth, googleProvider);
+      const user = result.user;
+
+      // Sama seperti email/password: hanya akun Qurma (UID cocok) yang boleh masuk.
+      const isAllowed = Boolean(ALLOWED_UID) && user.uid === ALLOWED_UID;
+
+      if (!isAllowed) {
+        await signOut(auth).catch(() => {});
+        setError(
+          'Akun Google ini belum terhubung ke akun Qurma. Masuk dulu dengan email/password, lalu hubungkan di menu Pengaturan → Keamanan.'
+        );
+        return;
+      }
+
+      const session = buildSession(user.email || '');
+      session.uid = user.uid;
+      session.nama = user.displayName || session.nama;
+
+      saveSession(session, remember);
+      clearSessionKicked();
+      navigate('/dashboard', { replace: true });
+    } catch (err) {
+      setError(firebaseErrorMessage(err.code || ''));
+    } finally {
+      setGoogleLoading(false);
     }
   };
 
@@ -224,6 +295,13 @@ export default function Login() {
               </div>
             )}
 
+            {success && (
+              <div className="flex items-center gap-2 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-300">
+                <CheckCircle2 size={14} />
+                {success}
+              </div>
+            )}
+
             <div className="flex items-center justify-between">
               <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-400">
                 <input
@@ -234,11 +312,18 @@ export default function Login() {
                 />
                 Ingat saya
               </label>
+              <button
+                type="button"
+                onClick={handleForgotPassword}
+                className="text-xs font-medium text-emerald-400 transition hover:text-emerald-300"
+              >
+                Lupa password?
+              </button>
             </div>
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || googleLoading}
               className="group flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 py-2.5 text-sm font-bold text-white shadow-lg shadow-emerald-500/40 transition hover:bg-emerald-400 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {loading ? (
@@ -255,6 +340,31 @@ export default function Login() {
               )}
             </button>
           </form>
+
+          <div className="my-5 flex items-center gap-3">
+            <span className="h-px flex-1 bg-white/10" />
+            <span className="text-[11px] font-medium uppercase tracking-wide text-slate-500">atau</span>
+            <span className="h-px flex-1 bg-white/10" />
+          </div>
+
+          <button
+            type="button"
+            onClick={handleGoogle}
+            disabled={loading || googleLoading}
+            className="flex w-full items-center justify-center gap-2.5 rounded-xl border border-white/15 bg-white/5 py-2.5 text-sm font-semibold text-white transition hover:bg-white/10 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {googleLoading ? (
+              <>
+                <Loader2 size={17} className="animate-spin" />
+                Masuk dengan Google...
+              </>
+            ) : (
+              <>
+                <GoogleIcon size={17} />
+                Masuk dengan Google
+              </>
+            )}
+          </button>
 
           <p className="mt-5 flex items-center justify-center gap-1.5 text-center text-[11px] text-slate-500">
             <ShieldCheck size={13} />

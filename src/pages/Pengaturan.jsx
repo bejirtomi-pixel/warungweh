@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Store,
   Bell,
@@ -18,7 +18,13 @@ import {
   ImageOff,
   X,
   QrCode,
+  Loader2,
+  Unlink,
 } from 'lucide-react';
+import { onAuthStateChanged, linkWithPopup, unlink, GoogleAuthProvider } from 'firebase/auth';
+import { auth } from '../firebase';
+import { googleProvider } from '../config/auth';
+import GoogleIcon from '../components/common/GoogleIcon';
 import Logo from '../components/common/Logo';
 import LogoWatermark from '../components/common/LogoWatermark';
 import { useData } from '../context/DataContext';
@@ -50,6 +56,9 @@ function Toggle({ enabled, onChange, label, desc }) {
 
 export default function Pengaturan() {
   const { storeProfile, updateStoreProfile, printerSettings, updatePrinterSettings, tables, addTable, updateTable, deleteTable } = useData();
+  const [googleLinked, setGoogleLinked] = useState(false);
+  const [googleEmail, setGoogleEmail] = useState('');
+  const [googleBusy, setGoogleBusy] = useState(false);
   const [activeTab, setActiveTab] = useState('profil');
   const [toast, setToast] = useState('');
   const [form, setForm] = useState(storeProfile || { nama: '', pemilik: '', alamat: '', telepon: '', email: '', footerStruk: '' });
@@ -91,6 +100,62 @@ export default function Pengaturan() {
   const showToast = (msg) => {
     setToast(msg);
     setTimeout(() => setToast(''), 2500);
+  };
+
+  // Status koneksi Google untuk akun Qurma yang sedang login.
+  useEffect(() => {
+    let unsub = () => {};
+    try {
+      unsub = onAuthStateChanged(auth, (u) => {
+        if (!u) {
+          setGoogleLinked(false);
+          setGoogleEmail('');
+          return;
+        }
+        const prov = (u.providerData || []).find((p) => p.providerId === 'google.com');
+        setGoogleLinked(Boolean(prov));
+        setGoogleEmail(prov?.email || u.email || '');
+      });
+    } catch {
+      // abaikan; jika auth tidak tersedia, tampilan koneksi tetap netral
+    }
+    return () => {
+      if (typeof unsub === 'function') unsub();
+    };
+  }, []);
+
+  const handleLinkGoogle = async () => {
+    if (!auth.currentUser) return;
+    setGoogleBusy(true);
+    try {
+      await linkWithPopup(auth.currentUser, googleProvider);
+      showToast('Akun Google berhasil dihubungkan');
+    } catch (err) {
+      const code = err && err.code ? err.code : '';
+      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+        return;
+      }
+      if (code === 'auth/credential-already-in-use' || code === 'auth/account-exists-with-different-credential') {
+        showToast('Akun Google ini sudah terhubung ke akun lain. Gunakan akun Google lain.');
+        return;
+      }
+      showToast('Gagal menghubungkan Google. Coba lagi.');
+    } finally {
+      setGoogleBusy(false);
+    }
+  };
+
+  const handleUnlinkGoogle = async () => {
+    if (!auth.currentUser) return;
+    setGoogleBusy(true);
+    try {
+      await unlink(auth.currentUser, GoogleAuthProvider.PROVIDER_ID);
+      showToast('Koneksi Google dilepas dari akun Qurma');
+    } catch (err) {
+      showToast('Gagal melepas koneksi Google.');
+    } finally {
+      setGoogleBusy(false);
+    }
   };
 
   const saveProfile = (e) => {
@@ -556,16 +621,65 @@ export default function Pengaturan() {
                   <p className="text-sm text-slate-500">
                     Pengaturan keamanan akun dan sesi login aplikasi.
                   </p>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
-                    <p className="text-sm font-semibold text-slate-700">Ubah Password</p>
-                    <p className="text-xs text-slate-500">Ganti password akun kasir Anda</p>
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-5">
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white shadow-sm">
+                        <GoogleIcon size={20} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-bold text-slate-800">Masuk dengan Google</p>
+                          {googleLinked ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                              <Check size={10} />
+                              Terhubung
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+                              Belum terhubung
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                          {googleLinked
+                            ? `Akun Google: ${googleEmail || auth.currentUser?.email || '-'}`
+                            : 'Hubungkan akun Google agar bisa masuk dengan tombol "Masuk dengan Google" di halaman login.'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 border-t border-slate-200 pt-4">
+                      {googleLinked ? (
+                        <button
+                          type="button"
+                          disabled={googleBusy}
+                          onClick={handleUnlinkGoogle}
+                          className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-white px-4 py-2.5 text-sm font-semibold text-red-600 transition hover:bg-red-50 disabled:opacity-60"
+                        >
+                          {googleBusy ? <Loader2 size={15} className="animate-spin" /> : <Unlink size={15} />}
+                          Lepas Koneksi Google
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={googleBusy}
+                          onClick={handleLinkGoogle}
+                          className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50 disabled:opacity-60"
+                        >
+                          {googleBusy ? <Loader2 size={15} className="animate-spin" /> : <GoogleIcon size={15} />}
+                          Hubungkan Google
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <Toggle
-                    enabled
-                    onChange={() => {}}
-                    label="Autentikasi Dua Faktor"
-                    desc="Tambahkan lapisan keamanan saat login"
-                  />
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+                    <p className="text-sm font-semibold text-slate-700">Lupa Password</p>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                      Gunakan tombol "Lupa password?" di halaman login. Tautan reset akan dikirim ke email akun Qurma.
+                    </p>
+                  </div>
                 </div>
               )}
 
