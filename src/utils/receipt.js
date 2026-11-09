@@ -93,19 +93,37 @@ ${buildStyle(paperSize)}
 <body>
 <div class="sheet">
   <div class="watermark-container">
-    <img class="watermark-img" src="/logo.jpg" alt="" />
+    <img class="watermark-img" src="${escapeHtml(storeProfile?.logo || '/logo.jpg')}" alt="" />
   </div>
   <div class="content-wrap">
-    <div class="logo-box center"><img class="logo" src="/logo.jpg" alt="Logo" /></div>
+    <div class="logo-box center"><img class="logo" src="${escapeHtml(storeProfile?.logo || '/logo.jpg')}" alt="Logo" /></div>
     <div class="center store">${escapeHtml(storeProfile?.nama || 'WarungKu')}</div>
     <div class="center muted">${escapeHtml(storeProfile?.alamat || '')}</div>
     ${storeProfile?.telepon ? `<div class="center muted">Telp/WA: ${escapeHtml(storeProfile.telepon)}</div>` : ''}
+    ${storeProfile?.npwp ? `<div class="center muted">NPWP: ${escapeHtml(storeProfile.npwp)}</div>` : ''}
     ${sep}
+    ${(() => {
+      const type = transaction.orderType;
+      let label = '';
+      if (type === 'dine_in' || (type === 'Diambil' && transaction.tableId)) {
+        label = `[ DINE IN - ${escapeHtml(transaction.tableName || 'MEJA')} ]`;
+      } else if (type === 'delivery' || type === 'Dikirim' || transaction.isDelivery) {
+        label = '[ DELIVERY / PESAN ANTAR ]';
+      } else if (type === 'pickup' || type === 'Diambil') {
+        label = '[ PICKUP / AMBIL SENDIRI ]';
+      }
+      return label ? `<div class="center" style="font-weight:bold;font-size:11px;margin:2px 0;">${label}</div>` : '';
+    })()}
     ${line('No', escapeHtml(transaction.id), 'muted')}
     ${line('Waktu', escapeHtml(transaction.tanggal || transaction.date || ''), 'muted')}
     ${line('Kasir', escapeHtml(transaction.kasir || 'Admin'), 'muted')}
     ${transaction.customer ? line('Pelanggan', escapeHtml(transaction.customer), 'muted') : ''}
     ${transaction.tableName ? line('Meja', escapeHtml(transaction.tableName), 'muted') : ''}
+    ${transaction.sessionId ? line('Sesi', escapeHtml(transaction.sessionId.slice(-8)), 'muted') : ''}
+    ${transaction.pickupCode ? line('Kode Ambil', escapeHtml(transaction.pickupCode), 'muted') : ''}
+    ${transaction.pickupTime ? line('Waktu Ambil', escapeHtml(transaction.pickupTime), 'muted') : ''}
+    ${transaction.deliveryAddress ? line('Alamat Kirim', escapeHtml(transaction.deliveryAddress), 'muted') : ''}
+    ${transaction.deliveryCourier ? line('Kurir', escapeHtml(transaction.deliveryCourier), 'muted') : ''}
     ${line('Metode', escapeHtml(transaction.metode || transaction.paymentMethod || 'Tunai'), 'muted')}
     ${transaction.paymentStatus ? line('Status', transaction.paymentStatus === 'Lunas' ? 'LUNAS' : transaction.paymentStatus === 'Hutang' ? 'HUTANG' : 'BELUM LUNAS', 'muted') : ''}
     ${sep}
@@ -239,6 +257,118 @@ ${buildStyle(paperSize)}
   const win = window.open('', '_blank', 'width=420,height=640');
   if (!win) {
     alert('Browser memblokir pop-up.\nIzinkan pop-up agar struk dapat dicetak.');
+    return null;
+  }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+  return win;
+}
+
+/**
+ * openOrderSlipReceipt - Cetak Slip Pesanan Dapur / Antrean Kasir
+ */
+export function openOrderSlipReceipt({ order, storeProfile, paperSize = '58' }) {
+  if (!order) return null;
+  const fmt = formatNumber;
+  const line = (left, right, cls = '') =>
+    `<div class="row ${cls}"><span>${left}</span><span>${right}</span></div>`;
+  const center = (txt, cls = '') => `<div class="center ${cls}">${txt}</div>`;
+  const sep = '<div class="sep"></div>';
+
+  const orderType = order.orderType || 'dine_in';
+  let typeBadge = '';
+  if (orderType === 'dine_in') {
+    typeBadge = `*** DINE IN - ${escapeHtml(order.tableName || 'MEJA')} ***`;
+  } else if (orderType === 'delivery') {
+    typeBadge = '*** PESANAN DELIVERY ***';
+  } else {
+    typeBadge = `*** PICKUP - ${escapeHtml(order.pickupCode || 'AMBIL')} ***`;
+  }
+
+  const items = Array.isArray(order.items) ? order.items : [];
+  const itemsHTML = items
+    .map((it) => {
+      const notesHtml = it.notes
+        ? `<div style="font-size: 9.5px; font-weight: bold; padding-left: 6px; color: #111;">&bull; Catatan: ${escapeHtml(it.notes)}</div>`
+        : '';
+      return (
+        `<div class="row item-name" style="font-size: 11px;"><span>${it.qty} x ${escapeHtml(it.nama)}</span><span>${fmt((Number(it.harga) || 0) * (Number(it.qty) || 1))}</span></div>` +
+        notesHtml
+      );
+    })
+    .join('');
+
+  const timeFormatted = order.createdAt
+    ? new Date(order.createdAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+    : '';
+  const dateFormatted = order.createdAt
+    ? new Date(order.createdAt).toLocaleDateString('id-ID', { year: 'numeric', month: '2-digit', day: '2-digit' })
+    : '';
+
+  const html = `<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<title>Slip Pesanan ${escapeHtml(order.orderNumber || order.id)}</title>
+<style>
+@page { size: ${paperSize === '80' ? '80mm' : '58mm'} auto; margin: 0; }
+${buildStyle(paperSize)}
+.kitchen-header { font-size: 13px; font-weight: bold; text-align: center; margin-bottom: 2px; }
+.type-badge { font-size: 12px; font-weight: bold; text-align: center; padding: 2px 0; border: 1px dashed #000; margin: 3px 0; }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <div class="content-wrap">
+    <div class="kitchen-header">SLIP PESANAN / DAPUR</div>
+    <div class="center muted">${escapeHtml(storeProfile?.nama || 'Qurmacel POS')}</div>
+    <div class="type-badge">${typeBadge}</div>
+    ${sep}
+    ${line('No. Order', escapeHtml(order.orderNumber || order.id), 'muted')}
+    ${line('Waktu', `${dateFormatted} ${timeFormatted}`, 'muted')}
+    ${order.tableName ? line('Meja', escapeHtml(order.tableName), 'muted') : ''}
+    ${order.sessionId ? line('Sesi Meja', escapeHtml(order.sessionId.slice(-8)), 'muted') : ''}
+    ${line('Pelanggan', escapeHtml(order.customerName || 'Umum'), 'muted')}
+    ${order.customerPhone ? line('No. HP', escapeHtml(order.customerPhone), 'muted') : ''}
+    ${order.pickupCode ? line('Kode Ambil', escapeHtml(order.pickupCode), 'muted') : ''}
+    ${order.pickupTime ? line('Waktu Ambil', escapeHtml(order.pickupTime), 'muted') : ''}
+    ${order.deliveryAddress ? line('Alamat Kirim', escapeHtml(order.deliveryAddress), 'muted') : ''}
+    ${order.courier ? line('Kurir', escapeHtml(order.courier), 'muted') : ''}
+    ${order.source ? line('Sumber', order.source === 'qr_menu' ? 'QR Menu Meja' : 'Kasir POS', 'muted') : ''}
+    ${sep}
+    <div style="font-weight: bold; font-size: 10px; margin-bottom: 3px;">DAFTAR MENU:</div>
+    ${itemsHTML}
+    ${sep}
+    ${order.notes ? `<div style="font-size: 10px; margin: 3px 0;"><b>Catatan Pesanan:</b><br/>${escapeHtml(order.notes)}</div>${sep}` : ''}
+    ${line('Total Item', `${items.reduce((s, it) => s + (Number(it.qty) || 1), 0)} pcs`)}
+    ${line('Estimasi Total', fmt(order.total), 'total-line')}
+    ${line('Status Bayar', order.paymentStatus === 'paid' ? 'LUNAS' : 'BELUM DIBAYAR', 'muted')}
+    ${sep}
+    <div class="center notice">~ Harap proses pesanan sesuai urutan ~</div>
+    <div class="center muted">Qurmacel POS Unified Order</div>
+  </div>
+</div>
+<script>
+  function printSlip() {
+    window.focus();
+    window.print();
+  }
+  window.addEventListener('load', function() {
+    setTimeout(printSlip, 150);
+  });
+  window.addEventListener('afterprint', function () {
+    setTimeout(function () {
+      try { window.close(); } catch (e) {}
+    }, 250);
+  });
+<\/script>
+</body>
+</html>`;
+
+  const win = window.open('', '_blank', 'width=420,height=640');
+  if (!win) {
+    alert('Browser memblokir pop-up.\nIzinkan pop-up agar slip pesanan dapat dicetak.');
     return null;
   }
   win.document.open();

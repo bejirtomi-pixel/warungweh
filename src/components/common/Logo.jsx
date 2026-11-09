@@ -16,7 +16,8 @@ export default function Logo({
   size = 'md',
   showText = false,
   textClassName = 'font-bold text-slate-800 text-lg tracking-tight',
-  alt = 'Logo Qurmacel POS'
+  alt = 'Logo Qurmacel POS',
+  src = '/logo.jpg',
 }) {
   const sizeClasses = {
     sm: 'h-7 w-auto max-w-[120px]',
@@ -31,7 +32,7 @@ export default function Logo({
   return (
     <div className={`inline-flex items-center gap-3 ${className}`}>
       <img
-        src="/logo.jpg"
+        src={src || '/logo.jpg'}
         alt={alt}
         className={`${selectedSizeClass} object-contain rounded-md transition-all duration-200 ${imgClassName}`}
         loading="eager"

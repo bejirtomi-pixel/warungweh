@@ -36,6 +36,8 @@ import {
   ArrowUpRight,
   HelpCircle,
   FileText,
+  Utensils,
+  Table2,
 } from 'lucide-react';
 import Logo from '../components/common/Logo';
 import LogoWatermark from '../components/common/LogoWatermark';
@@ -61,9 +63,10 @@ const PAYMENT_STATUS_OPTIONS = [
 ];
 
 const ORDER_TYPE_OPTIONS = [
-  { id: 'all', label: 'Semua Jenis Pesanan' },
-  { id: 'Diambil', label: 'Pickup (Diambil)' },
-  { id: 'Dikirim', label: 'Delivery (Dikirim)' },
+  { id: 'all', label: 'Semua Jenis Layanan' },
+  { id: 'dine_in', label: 'Dine In (Makan di Tempat)' },
+  { id: 'delivery', label: 'Delivery (Pesan Antar)' },
+  { id: 'pickup', label: 'Pickup (Ambil Sendiri)' },
 ];
 
 const DELIVERY_STATUS_OPTIONS = [
@@ -103,6 +106,18 @@ function getTrxDateString(trx) {
 function isCancelled(trx) {
   const s = String(trx?.status || '').toLowerCase();
   return s === 'dibatalkan' || s === 'batal';
+}
+
+function getNormalizedOrderType(trx) {
+  if (!trx) return 'pickup';
+  const type = trx.orderType;
+  if (type === 'dine_in') return 'dine_in';
+  if (type === 'delivery' || trx.isDelivery === true || type === 'Dikirim') return 'delivery';
+  if (type === 'pickup') return 'pickup';
+  if (type === 'Diambil') {
+    return trx.tableId ? 'dine_in' : 'pickup';
+  }
+  return trx.tableId ? 'dine_in' : 'pickup';
 }
 
 export default function Laporan() {
@@ -277,6 +292,15 @@ export default function Laporan() {
     const hutangCount = validTransactions.filter((t) => t.paymentStatus === 'Hutang').length;
     const dibatalkanCount = periodFilteredTransactions.filter((t) => isCancelled(t)).length;
 
+    // Hitung rincian per jenis layanan (Unified Order Types)
+    const dineInTrx = validTransactions.filter((t) => getNormalizedOrderType(t) === 'dine_in');
+    const deliveryTrx = validTransactions.filter((t) => getNormalizedOrderType(t) === 'delivery');
+    const pickupTrx = validTransactions.filter((t) => getNormalizedOrderType(t) === 'pickup');
+
+    const dineInOmzet = dineInTrx.reduce((s, t) => s + (Number(t.total) || 0), 0);
+    const deliveryOmzet = deliveryTrx.reduce((s, t) => s + (Number(t.total) || 0), 0);
+    const pickupOmzet = pickupTrx.reduce((s, t) => s + (Number(t.total) || 0), 0);
+
     return {
       totalOmzet,
       totalOngkir,
@@ -290,6 +314,12 @@ export default function Laporan() {
       belumLunasCount,
       hutangCount,
       dibatalkanCount,
+      dineInCount: dineInTrx.length,
+      dineInOmzet,
+      deliveryCount: deliveryTrx.length,
+      deliveryOmzet,
+      pickupCount: pickupTrx.length,
+      pickupOmzet,
     };
   }, [validTransactions, periodFilteredTransactions]);
 
@@ -393,9 +423,9 @@ export default function Laporan() {
         if (status !== paymentStatusFilter) return false;
       }
 
-      // Filter tipe pesanan
+      // Filter tipe pesanan (Unified Order Types)
       if (orderTypeFilter !== 'all') {
-        const type = trx.orderType || (trx.isDelivery ? 'Dikirim' : 'Diambil');
+        const type = getNormalizedOrderType(trx);
         if (type !== orderTypeFilter) return false;
       }
 
@@ -421,7 +451,7 @@ export default function Laporan() {
   // =========================================================================
   const deliveryTransactions = useMemo(() => {
     return periodFilteredTransactions.filter(
-      (t) => t.orderType === 'Dikirim' || t.isDelivery === true
+      (t) => getNormalizedOrderType(t) === 'delivery'
     );
   }, [periodFilteredTransactions]);
 
@@ -583,10 +613,15 @@ export default function Laporan() {
           { header: 'Kasir', accessor: (r) => r.kasir || 'Admin', align: 'left', width: '10%' },
           { header: 'Pelanggan', accessor: (r) => r.customer || 'Umum', align: 'left', width: '13%' },
           {
-            header: 'Pesanan',
-            accessor: (r) => (r.orderType === 'Dikirim' ? 'Delivery' : 'Pickup'),
+            header: 'Layanan',
+            accessor: (r) => {
+              const norm = getNormalizedOrderType(r);
+              if (norm === 'dine_in') return `Dine In${r.tableName ? ` (${r.tableName})` : ''}`;
+              if (norm === 'delivery') return 'Delivery';
+              return 'Pickup';
+            },
             align: 'center',
-            width: '8%',
+            width: '10%',
           },
           {
             header: 'Item',
@@ -677,7 +712,12 @@ export default function Laporan() {
         t.tanggal,
         t.kasir || 'Admin',
         t.customer || 'Umum',
-        t.orderType || (t.isDelivery ? 'Dikirim' : 'Diambil'),
+        (() => {
+          const norm = getNormalizedOrderType(t);
+          if (norm === 'dine_in') return `Dine In${t.tableName ? ` (${t.tableName})` : ''}`;
+          if (norm === 'delivery') return 'Delivery';
+          return 'Pickup';
+        })(),
         (t.items || []).reduce((s, i) => s + (Number(i.qty) || 0), 0),
         t.subtotal ?? 0,
         t.discount ?? 0,
@@ -1047,6 +1087,88 @@ export default function Laporan() {
               </div>
             </div>
 
+            {/* RINGKASAN PER JENIS LAYANAN (DINE IN, DELIVERY, PICKUP) */}
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                <div>
+                  <h3 className="text-sm font-extrabold text-slate-800">
+                    Kinerja Berdasarkan Jenis Layanan
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Pemisahan omzet dan jumlah transaksi antara Dine In, Delivery, dan Pickup.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+                {/* Dine In */}
+                <div className="rounded-xl border border-purple-200 bg-purple-50/50 p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-100 text-purple-700">
+                        <Utensils size={16} />
+                      </div>
+                      <span className="text-xs font-bold text-slate-800">Dine In (Makan di Tempat)</span>
+                    </div>
+                    <span className="text-[11px] font-bold text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full">
+                      {summaryMetrics.dineInCount} Trx
+                    </span>
+                  </div>
+                  <div className="pt-2 border-t border-purple-200/60">
+                    <span className="text-xs text-slate-500 block">Total Omzet:</span>
+                    <span className="text-lg font-black text-purple-900">
+                      {formatRupiah(summaryMetrics.dineInOmzet)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Delivery */}
+                <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 text-blue-700">
+                        <Truck size={16} />
+                      </div>
+                      <span className="text-xs font-bold text-slate-800">Delivery (Pesan Antar)</span>
+                    </div>
+                    <span className="text-[11px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">
+                      {summaryMetrics.deliveryCount} Trx
+                    </span>
+                  </div>
+                  <div className="pt-2 border-t border-blue-200/60">
+                    <span className="text-xs text-slate-500 block">Total Omzet:</span>
+                    <span className="text-lg font-black text-blue-900">
+                      {formatRupiah(summaryMetrics.deliveryOmzet)}
+                    </span>
+                    <p className="text-[10px] text-slate-500 mt-0.5">
+                      Termasuk ongkir {formatRupiah(summaryMetrics.totalOngkir)}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Pickup */}
+                <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 text-amber-700">
+                        <ShoppingBag size={16} />
+                      </div>
+                      <span className="text-xs font-bold text-slate-800">Pickup (Ambil Sendiri)</span>
+                    </div>
+                    <span className="text-[11px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
+                      {summaryMetrics.pickupCount} Trx
+                    </span>
+                  </div>
+                  <div className="pt-2 border-t border-amber-200/60">
+                    <span className="text-xs text-slate-500 block">Total Omzet:</span>
+                    <span className="text-lg font-black text-amber-900">
+                      {formatRupiah(summaryMetrics.pickupOmzet)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* D. RINGKASAN METODE PEMBAYARAN */}
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xs space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
@@ -1313,16 +1435,31 @@ export default function Laporan() {
                           </td>
 
                           <td className="px-4 py-3.5 text-center">
-                            <span
-                              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
-                                isDeliv
-                                  ? 'bg-blue-50 text-blue-700 border border-blue-200/60'
-                                  : 'bg-slate-100 text-slate-700'
-                              }`}
-                            >
-                              {isDeliv ? <Truck size={10} /> : <ShoppingBag size={10} />}
-                              <span>{isDeliv ? 'Delivery' : 'Pickup'}</span>
-                            </span>
+                            {(() => {
+                              const norm = getNormalizedOrderType(trx);
+                              if (norm === 'dine_in') {
+                                return (
+                                  <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200/60">
+                                    <Utensils size={10} />
+                                    <span>{trx.tableName ? `Dine In · ${trx.tableName}` : 'Dine In'}</span>
+                                  </span>
+                                );
+                              }
+                              if (norm === 'delivery') {
+                                return (
+                                  <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200/60">
+                                    <Truck size={10} />
+                                    <span>Delivery</span>
+                                  </span>
+                                );
+                              }
+                              return (
+                                <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200/60">
+                                  <ShoppingBag size={10} />
+                                  <span>Pickup</span>
+                                </span>
+                              );
+                            })()}
                           </td>
 
                           <td className="px-4 py-3.5 text-center font-bold text-slate-700">

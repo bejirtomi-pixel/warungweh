@@ -20,6 +20,8 @@ import {
   saveSettings,
   getTables,
   saveTables,
+  getTableSessions,
+  saveTableSessions,
   getOrders,
   saveOrders,
   getCustomers,
@@ -66,8 +68,11 @@ function normalizeSettings(s = {}) {
     address: s.address || s.alamat || DEFAULT_SETTINGS.address,
     phone: s.phone || s.telepon || DEFAULT_SETTINGS.phone,
     footer: s.footerStruk || s.footer || DEFAULT_SETTINGS.footer,
+    footerStruk: s.footerStruk || s.footer || DEFAULT_SETTINGS.footer,
     pemilik: s.pemilik || '',
     email: s.email || '',
+    npwp: s.npwp || '',
+    logo: s.logo || DEFAULT_SETTINGS.logo || '/logo.jpg',
     paymentMethods: {
       ...DEFAULT_PAYMENT_METHODS,
       ...(s.paymentMethods || {}),
@@ -147,6 +152,11 @@ export function DataProvider({ children }) {
     return Array.isArray(stored) ? stored : [];
   });
 
+  const [tableSessions, setTableSessions] = useState(() => {
+    const stored = getTableSessions();
+    return Array.isArray(stored) ? stored : [];
+  });
+
   const [orders, setOrders] = useState(() => {
     const stored = getOrders();
     return Array.isArray(stored) ? stored : [];
@@ -212,6 +222,17 @@ export function DataProvider({ children }) {
       );
     }
   }, [tables]);
+
+  const persistTableSessions = useCallback((next) => {
+    setTableSessions(next);
+    saveTableSessions(next);
+    const uid = authUidRef.current;
+    if (uid) {
+      pushItems(uid, 'tableSessions', next, tableSessions).catch((e) =>
+        console.warn('Sync table sessions ke Firebase gagal:', e)
+      );
+    }
+  }, [tableSessions]);
 
   const persistOrders = useCallback((next) => {
     setOrders(next);
@@ -313,11 +334,14 @@ export function DataProvider({ children }) {
 
   const addTable = useCallback(
     (table) => {
+      const generatedToken = `TBL-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
       const newTable = {
-        id: `TBL-${Date.now()}`,
-        name: table.name || `Meja ${tables.length + 1}`,
-        active: true,
-        qrisImage: table.qrisImage || '',
+        id: table.id || `TBL-${Date.now()}`,
+        name: (table.name || `Meja ${tables.length + 1}`).trim(),
+        capacity: Number(table.capacity) > 0 ? Number(table.capacity) : 4,
+        active: table.active !== undefined ? table.active : true,
+        qrToken: table.qrToken || generatedToken,
+        activeSessionId: null,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -331,9 +355,29 @@ export function DataProvider({ children }) {
     (updated) => {
       persistTables(
         tables.map((t) =>
-          t.id === updated.id ? { ...t, ...updated, updatedAt: new Date().toISOString() } : t
+          t.id === updated.id
+            ? {
+                ...t,
+                ...updated,
+                capacity: updated.capacity !== undefined ? Number(updated.capacity) || 4 : t.capacity || 4,
+                updatedAt: new Date().toISOString(),
+              }
+            : t
         )
       );
+    },
+    [tables, persistTables]
+  );
+
+  const regenerateTableQr = useCallback(
+    (id) => {
+      const nextToken = `TBL-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+      persistTables(
+        tables.map((t) =>
+          t.id === id ? { ...t, qrToken: nextToken, updatedAt: new Date().toISOString() } : t
+        )
+      );
+      return nextToken;
     },
     [tables, persistTables]
   );
@@ -343,6 +387,368 @@ export function DataProvider({ children }) {
       persistTables(tables.filter((t) => t.id !== id));
     },
     [tables, persistTables]
+  );
+
+  // Unified Order Management: Create Order (Dine In, Delivery, Pickup)
+  const createUnifiedOrder = useCallback(
+    (orderInput) => {
+      const {
+        orderType = 'dine_in', // 'dine_in' | 'delivery' | 'pickup'
+        source = 'pos_cashier', // 'pos_cashier' | 'qr_menu'
+        tableId = null,
+        customerName = '',
+        customerPhone = '',
+        deliveryAddress = '',
+        deliveryAddressNote = '',
+        deliveryCourier = 'Kurir Toko',
+        deliveryCourierPhone = '',
+        shippingCost = 0,
+        pickupCode = null,
+        pickupTime = null,
+        items = [],
+        discount = 0,
+        tax = 0,
+        notes = '',
+        paymentMethod = null,
+        paymentStatus = null,
+        initialOrderStatus = null,
+      } = orderInput;
+
+      const calcSubtotal = items.reduce(
+        (sum, it) => sum + (Number(it.harga) || 0) * (Number(it.qty) || 0),
+        0
+      );
+      const calcTax = Number(tax) || 0;
+      const calcDiscount = Number(discount) || 0;
+      const calcShipping = Number(shippingCost) || 0;
+      const calcTotal = Math.max(0, calcSubtotal - calcDiscount + calcTax + calcShipping);
+
+      const nowIso = new Date().toISOString();
+      const generatedOrderId = `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+      const generatedOrderNumber = `ORD-${Date.now().toString().slice(-6)}`;
+      const generatedPickupCode =
+        pickupCode ||
+        (orderType === 'pickup'
+          ? `PU-${Math.floor(1000 + Math.random() * 9000)}`
+          : null);
+
+      let targetSessionId = null;
+      let targetTable = null;
+
+      if (orderType === 'dine_in' && tableId) {
+        targetTable = tables.find((t) => t.id === tableId);
+        const existingSession = tableSessions.find(
+          (s) => s.tableId === tableId && s.status !== 'closed'
+        );
+
+        if (existingSession) {
+          targetSessionId = existingSession.id;
+        } else {
+          // Buat sesi meja baru jika belum ada sesi aktif
+          const newSessionId = `SES-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+          targetSessionId = newSessionId;
+          const newSession = {
+            id: newSessionId,
+            tableId,
+            tableName: targetTable?.name || `Meja ${tableId}`,
+            status: 'active',
+            startedAt: nowIso,
+            closedAt: null,
+            orderIds: [generatedOrderId],
+            customerName: customerName.trim() || `Tamu ${targetTable?.name || ''}`,
+            subtotal: calcSubtotal,
+            tax: calcTax,
+            discount: calcDiscount,
+            total: calcTotal,
+            paymentStatus: 'unpaid',
+            paymentMethod: null,
+            settledBy: null,
+            notes: notes || '',
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          };
+
+          persistTables(
+            tables.map((t) =>
+              t.id === tableId ? { ...t, activeSessionId: newSessionId, updatedAt: nowIso } : t
+            )
+          );
+
+          persistTableSessions([newSession, ...tableSessions]);
+        }
+      }
+
+      const defaultOrderStatus =
+        initialOrderStatus || (source === 'qr_menu' ? 'pending' : 'confirmed');
+      const defaultFulfillment =
+        source === 'qr_menu'
+          ? 'pending'
+          : orderType === 'delivery'
+          ? 'preparing'
+          : 'preparing';
+      const defaultPayment =
+        paymentStatus || (orderType === 'dine_in' ? 'unpaid' : 'unpaid');
+
+      const newOrder = {
+        id: generatedOrderId,
+        orderNumber: generatedOrderNumber,
+        orderType, // 'dine_in' | 'delivery' | 'pickup'
+        source, // 'qr_menu' | 'pos_cashier'
+        tableId: orderType === 'dine_in' ? tableId : null,
+        tableName: orderType === 'dine_in' ? targetTable?.name || null : null,
+        sessionId: targetSessionId,
+        customerName: customerName.trim() || (orderType === 'dine_in' ? `Tamu ${targetTable?.name || ''}` : 'Umum'),
+        customerPhone: customerPhone.trim(),
+        deliveryAddress: orderType === 'delivery' ? deliveryAddress.trim() : null,
+        deliveryAddressNote: orderType === 'delivery' ? deliveryAddressNote?.trim() || null : null,
+        courier: orderType === 'delivery' ? deliveryCourier : null,
+        deliveryCourier: orderType === 'delivery' ? deliveryCourier : null,
+        courierPhone: orderType === 'delivery' ? deliveryCourierPhone : null,
+        shippingCost: calcShipping,
+        pickupCode: generatedPickupCode,
+        pickupTime: orderType === 'pickup' ? pickupTime : null,
+        items: items.map((it) => ({
+          id: it.id,
+          nama: it.nama,
+          harga: Number(it.harga) || 0,
+          qty: Number(it.qty) || 1,
+          notes: it.notes || '',
+          pajakAktif: Boolean(it.pajakAktif),
+          pajakJenis: it.pajakJenis || 'PPN',
+          pajakPersen: Number(it.pajakPersen) || 0,
+        })),
+        subtotal: calcSubtotal,
+        discount: calcDiscount,
+        tax: calcTax,
+        total: calcTotal,
+        orderStatus: defaultOrderStatus,
+        fulfillmentStatus: defaultFulfillment,
+        paymentStatus: defaultPayment,
+        paymentMethod: paymentMethod || null,
+        cancellationReason: '',
+        notes: notes || '',
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+
+      // Jika pesanan tambahan pada sesi yang ada, perbarui daftar order dan hitung tagihan konsolidasi
+      if (targetSessionId && tableSessions.some((s) => s.id === targetSessionId)) {
+        persistTableSessions(
+          tableSessions.map((s) => {
+            if (s.id !== targetSessionId) return s;
+            const updatedOrderIds = [...new Set([...(s.orderIds || []), generatedOrderId])];
+            const allSessionOrders = [
+              newOrder,
+              ...orders.filter(
+                (o) =>
+                  updatedOrderIds.includes(o.id) &&
+                  o.id !== generatedOrderId &&
+                  o.orderStatus !== 'cancelled'
+              ),
+            ];
+            const sSub = allSessionOrders.reduce((sum, o) => sum + (Number(o.subtotal) || 0), 0);
+            const sTax = allSessionOrders.reduce((sum, o) => sum + (Number(o.tax) || 0), 0);
+            const sDisc = allSessionOrders.reduce((sum, o) => sum + (Number(o.discount) || 0), 0);
+            const sTot = Math.max(0, sSub - sDisc + sTax);
+
+            return {
+              ...s,
+              orderIds: updatedOrderIds,
+              subtotal: sSub,
+              tax: sTax,
+              discount: sDisc,
+              total: sTot,
+              updatedAt: nowIso,
+            };
+          })
+        );
+      }
+
+      // Pengurangan stok atomik
+      const nextProducts = products.map((p) => {
+        const item = items.find((i) => i.id === p.id);
+        if (!item) return p;
+        return {
+          ...p,
+          stok: Math.max(0, (Number(p.stok) || 0) - (Number(item.qty) || 0)),
+        };
+      });
+      persistProducts(nextProducts);
+
+      persistOrders([newOrder, ...orders]);
+      return newOrder;
+    },
+    [orders, tableSessions, tables, products, persistOrders, persistTableSessions, persistTables, persistProducts]
+  );
+
+  // Update status pemrosesan & penolakan pesanan
+  const updateOrderProcessingStatus = useCallback(
+    (orderId, { orderStatus, fulfillmentStatus, paymentStatus, cancellationReason }) => {
+      const existing = orders.find((o) => o.id === orderId);
+      if (!existing) return;
+
+      const nowIso = new Date().toISOString();
+      const patch = { updatedAt: nowIso };
+
+      if (orderStatus !== undefined) patch.orderStatus = orderStatus;
+      if (fulfillmentStatus !== undefined) patch.fulfillmentStatus = fulfillmentStatus;
+      if (paymentStatus !== undefined) patch.paymentStatus = paymentStatus;
+      if (cancellationReason !== undefined) patch.cancellationReason = cancellationReason;
+
+      // Pengembalian stok otomatis jika pesanan dibatalkan / ditolak kasir
+      if (orderStatus === 'cancelled' && existing.orderStatus !== 'cancelled') {
+        const nextProducts = products.map((p) => {
+          const item = (existing.items || []).find((i) => i.id === p.id);
+          if (!item) return p;
+          return {
+            ...p,
+            stok: (Number(p.stok) || 0) + (Number(item.qty) || 0),
+          };
+        });
+        persistProducts(nextProducts);
+
+        if (existing.sessionId) {
+          persistTableSessions(
+            tableSessions.map((s) => {
+              if (s.id !== existing.sessionId) return s;
+              const remainingOrders = orders.filter(
+                (o) =>
+                  (s.orderIds || []).includes(o.id) &&
+                  o.id !== orderId &&
+                  o.orderStatus !== 'cancelled'
+              );
+              const sSub = remainingOrders.reduce((sum, o) => sum + (Number(o.subtotal) || 0), 0);
+              const sTax = remainingOrders.reduce((sum, o) => sum + (Number(o.tax) || 0), 0);
+              const sDisc = remainingOrders.reduce((sum, o) => sum + (Number(o.discount) || 0), 0);
+              const sTot = Math.max(0, sSub - sDisc + sTax);
+              return {
+                ...s,
+                subtotal: sSub,
+                tax: sTax,
+                discount: sDisc,
+                total: sTot,
+                updatedAt: nowIso,
+              };
+            })
+          );
+        }
+      }
+
+      persistOrders(
+        orders.map((o) => (o.id === orderId ? { ...o, ...patch } : o))
+      );
+    },
+    [orders, products, tableSessions, persistOrders, persistProducts, persistTableSessions]
+  );
+
+  // Tutup Sesi Meja & Catat Transaksi Final Terkonsolidasi
+  const closeTableSession = useCallback(
+    (sessionId, settlementData = {}) => {
+      const session = tableSessions.find((s) => s.id === sessionId);
+      if (!session) return null;
+
+      const nowIso = new Date().toISOString();
+      const {
+        paymentMethod = 'Tunai',
+        paymentCategory = 'Tunai',
+        paid = session.total,
+        change = 0,
+        kasir = 'Admin',
+      } = settlementData;
+
+      // Tutup sesi
+      persistTableSessions(
+        tableSessions.map((s) =>
+          s.id === sessionId
+            ? {
+                ...s,
+                status: 'closed',
+                closedAt: nowIso,
+                paymentStatus: 'paid',
+                paymentMethod,
+                settledBy: kasir,
+                updatedAt: nowIso,
+              }
+            : s
+        )
+      );
+
+      // Kembalikan meja menjadi tersedia (kosongkan activeSessionId)
+      persistTables(
+        tables.map((t) =>
+          t.id === session.tableId ? { ...t, activeSessionId: null, updatedAt: nowIso } : t
+        )
+      );
+
+      // Perbarui status pesanan pada sesi ini
+      persistOrders(
+        orders.map((o) =>
+          (session.orderIds || []).includes(o.id)
+            ? {
+                ...o,
+                paymentStatus: 'paid',
+                paymentMethod,
+                fulfillmentStatus:
+                  o.fulfillmentStatus === 'pending' || o.fulfillmentStatus === 'preparing'
+                    ? 'served'
+                    : o.fulfillmentStatus,
+                updatedAt: nowIso,
+              }
+            : o
+        )
+      );
+
+      // Gabungkan seluruh item pesanan dari sesi ini menjadi satu transaksi final
+      const sessionOrders = orders.filter(
+        (o) => (session.orderIds || []).includes(o.id) && o.orderStatus !== 'cancelled'
+      );
+      const consolidatedItems = [];
+      sessionOrders.forEach((o) => {
+        (o.items || []).forEach((it) => {
+          const ex = consolidatedItems.find((ci) => ci.id === it.id);
+          if (ex) {
+            ex.qty += Number(it.qty) || 0;
+          } else {
+            consolidatedItems.push({ ...it, qty: Number(it.qty) || 1 });
+          }
+        });
+      });
+
+      const finalTrx = {
+        id: generateTransactionId(),
+        tanggal: new Date().toLocaleDateString('id-ID', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+        kasir,
+        customer: session.customerName || `Tamu ${session.tableName}`,
+        items: consolidatedItems,
+        subtotal: session.subtotal,
+        discount: session.discount,
+        tax: session.tax,
+        totalPajak: session.tax,
+        total: session.total,
+        paid: Number(paid) || session.total,
+        change: Number(change) || 0,
+        paymentCategory,
+        paymentMethod,
+        metode: paymentMethod,
+        paymentStatus: 'Lunas',
+        status: 'Selesai',
+        orderType: 'dine_in',
+        tableId: session.tableId,
+        tableName: session.tableName,
+        sessionId: session.id,
+        createdAt: nowIso,
+      };
+
+      persistTransactions([finalTrx, ...transactions]);
+      return finalTrx;
+    },
+    [tableSessions, tables, orders, transactions, persistTableSessions, persistTables, persistOrders, persistTransactions]
   );
 
   // Orders (Pengiriman)
@@ -592,15 +998,18 @@ export function DataProvider({ children }) {
   const updateStoreProfile = useCallback(
     (profile = {}) => {
       updateSettings({
-        storeName: profile.nama || '',
-        address: profile.alamat || '',
-        phone: profile.telepon || '',
-        email: profile.email || '',
-        pemilik: profile.pemilik || '',
-        footerStruk: profile.footerStruk || '',
+        storeName: profile.nama !== undefined ? profile.nama : (settings.storeName || ''),
+        address: profile.alamat !== undefined ? profile.alamat : (settings.address || ''),
+        phone: profile.telepon !== undefined ? profile.telepon : (settings.phone || ''),
+        email: profile.email !== undefined ? profile.email : (settings.email || ''),
+        pemilik: profile.pemilik !== undefined ? profile.pemilik : (settings.pemilik || ''),
+        npwp: profile.npwp !== undefined ? profile.npwp : (settings.npwp || ''),
+        logo: profile.logo !== undefined ? profile.logo : (settings.logo || '/logo.jpg'),
+        footerStruk: profile.footerStruk !== undefined ? profile.footerStruk : (settings.footerStruk || settings.footer || ''),
+        footer: profile.footerStruk !== undefined ? profile.footerStruk : (settings.footer || ''),
       });
     },
-    [updateSettings]
+    [updateSettings, settings]
   );
 
   const printerSettings = settings.printerSettings || DEFAULT_PRINTER_SETTINGS;
@@ -668,6 +1077,10 @@ export function DataProvider({ children }) {
     setTables(normTables);
     saveTables(normTables);
 
+    const normSessions = Array.isArray(remote.tableSessions) ? remote.tableSessions : [];
+    setTableSessions(normSessions);
+    saveTableSessions(normSessions);
+
     const normOrders = Array.isArray(remote.orders) ? remote.orders : [];
     setOrders(normOrders);
     saveOrders(normOrders);
@@ -709,6 +1122,7 @@ export function DataProvider({ children }) {
           pushItems(uid, 'productMeta', [], []),
           pushItems(uid, 'transactions', [], []),
           pushItems(uid, 'tables', [], []),
+          pushItems(uid, 'tableSessions', [], []),
           pushItems(uid, 'orders', [], []),
           pushItems(uid, 'customers', [], []),
           pushItems(uid, 'debts', [], []),
@@ -797,11 +1211,13 @@ export function DataProvider({ children }) {
 
   const storeProfile = useMemo(
     () => ({
-      nama: settings.storeName || 'WarungKu',
+      nama: settings.storeName || 'Qurmacel Store',
       pemilik: settings.pemilik || '',
+      npwp: settings.npwp || '',
       alamat: settings.address || '',
       telepon: settings.phone || '',
       email: settings.email || '',
+      logo: settings.logo || '/logo.jpg',
       footerStruk:
         settings.footerStruk ||
         settings.footer ||
@@ -818,6 +1234,7 @@ export function DataProvider({ children }) {
       settings,
       minStockThreshold: settings.minStockThreshold || 5,
       tables,
+      tableSessions,
       orders,
       customers,
       debts,
@@ -841,10 +1258,15 @@ export function DataProvider({ children }) {
       addTable,
       updateTable,
       deleteTable,
+      regenerateTableQr,
 
       createOrder,
       updateOrderStatus,
       deleteOrder,
+
+      createUnifiedOrder,
+      updateOrderProcessingStatus,
+      closeTableSession,
 
       createCustomer,
       updateCustomer,
@@ -870,6 +1292,7 @@ export function DataProvider({ children }) {
       transactions,
       settings,
       tables,
+      tableSessions,
       orders,
       customers,
       debts,
@@ -889,9 +1312,13 @@ export function DataProvider({ children }) {
       addTable,
       updateTable,
       deleteTable,
+      regenerateTableQr,
       createOrder,
       updateOrderStatus,
       deleteOrder,
+      createUnifiedOrder,
+      updateOrderProcessingStatus,
+      closeTableSession,
       createCustomer,
       updateCustomer,
       deleteCustomer,

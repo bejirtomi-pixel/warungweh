@@ -16,12 +16,14 @@ export const DEFAULT_PAYMENT_METHODS = {
 };
 
 export const DEFAULT_SETTINGS = {
-  storeName: 'WarungKu',
+  storeName: 'Qurmacel Store',
   address: 'Jl. Raya Warung No. 1',
   phone: '0812-3456-7890',
   footer: 'Terima kasih telah berbelanja.',
   pemilik: '',
   email: '',
+  npwp: '',
+  logo: '/logo.jpg',
   paymentMethods: DEFAULT_PAYMENT_METHODS,
   pajakTransaksiAktif: false,
   pajakTransaksiJenis: 'PPN',

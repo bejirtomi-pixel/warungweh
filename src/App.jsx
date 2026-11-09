@@ -9,10 +9,12 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Barang from './pages/Barang';
 import Transaksi from './pages/Transaksi';
+import Meja from './pages/Meja';
 import Laporan from './pages/Laporan';
 import InformasiBarang from './pages/InformasiBarang';
 import Pengaturan from './pages/Pengaturan';
 import ProfilToko from './pages/ProfilToko';
+import QrMenu from './pages/QrMenu';
 import NotFound from './pages/NotFound';
 
 // Gerbang autentikasi berbasis Firebase Auth (Google-only).
@@ -75,12 +77,15 @@ export default function App() {
       <ToastProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/menu/:tableId" element={<QrMenu />} />
+          <Route path="/order/:tableId" element={<QrMenu />} />
 
           <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/barang" element={<Barang />} />
             <Route path="/transaksi" element={<Transaksi />} />
+            <Route path="/meja" element={<Meja />} />
             <Route path="/laporan" element={<Laporan />} />
             <Route path="/informasi-barang" element={<InformasiBarang />} />
             <Route path="/pengaturan" element={<Pengaturan />} />

@@ -4,6 +4,7 @@ const KEYS = {
   transactions: 'warungku_transactions',
   settings: 'warungku_settings',
   tables: 'warungku_tables',
+  tableSessions: 'warungku_table_sessions',
   orders: 'warungku_orders',
   customers: 'warungku_customers',
   debts: 'warungku_debts',
@@ -91,6 +92,15 @@ export function getTables() {
 
 export function saveTables(tables) {
   return writeJSON(KEYS.tables, tables);
+}
+
+// Table Sessions (Satu Meja = Satu Sesi Aktif = Satu Tagihan Gabungan)
+export function getTableSessions() {
+  return readJSON(KEYS.tableSessions, []);
+}
+
+export function saveTableSessions(sessions) {
+  return writeJSON(KEYS.tableSessions, sessions);
 }
 
 // Orders (Pengiriman)
