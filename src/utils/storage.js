@@ -194,6 +194,7 @@ export function getNotifPrefs() {
   return readJSON('warungku_notif_prefs', {
     notifTransaksi: true,
     notifStok: true,
+    notifStokHabis: true,
     notifPromo: false,
   });
 }

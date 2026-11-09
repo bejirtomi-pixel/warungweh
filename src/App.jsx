@@ -4,7 +4,6 @@ import { DataProvider } from './context/DataContext';
 import { ToastProvider } from './components/Toast';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { auth } from './firebase';
-import { ALLOWED_UID } from './config/auth';
 import AppLayout from './components/layout/AppLayout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -16,8 +15,9 @@ import Pengaturan from './pages/Pengaturan';
 import ProfilToko from './pages/ProfilToko';
 import NotFound from './pages/NotFound';
 
-// Gerbang autentikasi berbasis Firebase Auth.
-// Hanya pengguna yang login ANDA memiliki UID akun Qurma yang diizinkan masuk.
+// Gerbang autentikasi berbasis Firebase Auth (Google-only).
+// Semua akun Google yang berhasil diautentikasi Firebase diizinkan masuk;
+// tanpa pembatas UID atau email.
 function RequireAuth({ children }) {
   const [state, setState] = React.useState({
     ready: false,

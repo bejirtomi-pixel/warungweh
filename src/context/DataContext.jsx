@@ -29,8 +29,7 @@ import {
   getCategories,
   saveCategories,
 } from '../utils/storage';
-import { dummyProducts, DEFAULT_CATEGORIES, DEFAULT_SETTINGS } from '../data/dummyProducts';
-import { ALLOWED_UID } from '../config/auth';
+import { dummyProducts, DEFAULT_CATEGORIES, DEFAULT_SETTINGS, DEFAULT_PAYMENT_METHODS } from '../data/dummyProducts';
 import { generateTransactionId } from '../utils/generateTransactionId';
 import { formatCurrency, formatNumber } from '../utils/formatCurrency';
 
@@ -50,9 +49,13 @@ function normalizeProduct(p = {}) {
     hargaModal: Number(p.purchasePrice ?? p.hargaModal) || 0,
     harga: Number(p.sellingPrice ?? p.harga) || 0,
     stok: Number(p.stock ?? p.stok) || 0,
+    minStok: p.minStok !== undefined && p.minStok !== null ? Number(p.minStok) : (p.minStock !== undefined && p.minStock !== null ? Number(p.minStock) : 0),
     satuan: p.unit || p.satuan || 'Pcs',
     status: p.status || 'Aktif',
     foto: p.foto || p.image || '',
+    pajakAktif: Boolean(p.pajakAktif),
+    pajakJenis: p.pajakJenis || 'PPN',
+    pajakPersen: p.pajakPersen !== undefined && p.pajakPersen !== null ? Number(p.pajakPersen) : 10,
   };
 }
 
@@ -65,12 +68,20 @@ function normalizeSettings(s = {}) {
     footer: s.footerStruk || s.footer || DEFAULT_SETTINGS.footer,
     pemilik: s.pemilik || '',
     email: s.email || '',
+    paymentMethods: {
+      ...DEFAULT_PAYMENT_METHODS,
+      ...(s.paymentMethods || {}),
+    },
     printerSettings: {
       ...DEFAULT_PRINTER_SETTINGS,
       ...(s.printerSettings || {}),
       paperSize: s.printerSettings?.paperSize || '58',
       autoPrint: Boolean(s.printerSettings?.autoPrint),
     },
+    pajakTransaksiAktif: Boolean(s.pajakTransaksiAktif),
+    pajakTransaksiJenis: s.pajakTransaksiJenis || 'PPN',
+    pajakTransaksiPersen: s.pajakTransaksiPersen !== undefined && s.pajakTransaksiPersen !== null ? Number(s.pajakTransaksiPersen) : 10,
+    minStockThreshold: Number(s.minStockThreshold) > 0 ? Number(s.minStockThreshold) : 5,
   };
 }
 
@@ -81,10 +92,12 @@ function normalizeProductMeta(m = {}) {
     bestSellerNote: m.bestSellerNote || '',
     promoActive: Boolean(m.promoActive),
     promoTitle: m.promoTitle || '',
-    promoType: m.promoType === 'persen' ? 'persen' : 'nominal',
+    promoType: m.promoType || 'persen',
     promoValue: Number(m.promoValue) || 0,
     promoNote: m.promoNote || '',
-    b1g1: Boolean(m.b1g1),
+    promoStartDate: m.promoStartDate || '',
+    promoEndDate: m.promoEndDate || '',
+    b1g1: Boolean(m.b1g1 || m.promoType === 'b1g1'),
     b1g1Note: m.b1g1Note || '',
     deskripsi: m.deskripsi || '',
     updatedAt: m.updatedAt || null,
@@ -504,6 +517,10 @@ export function DataProvider({ children }) {
       const transaction = {
         id: generateTransactionId(),
         date: new Date().toISOString(),
+        pajakBarang: Number(data.pajakBarang) || 0,
+        pajakTransaksi: Number(data.pajakTransaksi) || 0,
+        totalPajak: Number(data.totalPajak ?? data.tax) || 0,
+        tax: Number(data.totalPajak ?? data.tax) || 0,
         ...data,
       };
 
@@ -600,6 +617,20 @@ export function DataProvider({ children }) {
     [printerSettings, updateSettings]
   );
 
+  const paymentMethods = settings.paymentMethods || DEFAULT_PAYMENT_METHODS;
+
+  const updatePaymentSettings = useCallback(
+    (partial = {}) => {
+      updateSettings({
+        paymentMethods: {
+          ...paymentMethods,
+          ...partial,
+        },
+      });
+    },
+    [paymentMethods, updateSettings]
+  );
+
   const resetData = useCallback(() => {
     const defaultProducts = dummyProducts.map(normalizeProduct);
     const defaults = normalizeSettings(DEFAULT_SETTINGS);
@@ -670,6 +701,22 @@ export function DataProvider({ children }) {
     let unsub = () => {};
 
     try {
+      // Seed awal untuk akun baru: tulis katalog & pengaturan default (tetap,
+      // bukan data lokal pengguna lain) ke Firestore milik uid ini.
+      const seedDataAwal = async (uid, produkAwal, setelanAwal) => {
+        await Promise.all([
+          pushItems(uid, 'products', produkAwal, []),
+          pushItems(uid, 'productMeta', [], []),
+          pushItems(uid, 'transactions', [], []),
+          pushItems(uid, 'tables', [], []),
+          pushItems(uid, 'orders', [], []),
+          pushItems(uid, 'customers', [], []),
+          pushItems(uid, 'debts', [], []),
+          pushCategories(uid, []),
+          pushSettings(uid, setelanAwal),
+        ]);
+      };
+
       unsub = onAuthStateChanged(auth, (user) => {
 
         if (!user) {
@@ -677,13 +724,10 @@ export function DataProvider({ children }) {
           return;
         }
 
+        // Google-only: semua akun yang berhasil diautentikasi Firebase boleh
+        // membaca & menulis datanya sendiri di Firestore (per-uid, tanpa
+        // pembatas ALLOWED_UID).
         const uid = user.uid;
-
-        // Hanya akun Qurma yang berhak membaca datanya dari Firestore.
-        if (!ALLOWED_UID || uid !== ALLOWED_UID) {
-          authUidRef.current = null;
-          return;
-        }
 
         authUidRef.current = uid;
 
@@ -691,6 +735,36 @@ export function DataProvider({ children }) {
           try {
             const remote = await fetchUserData(uid);
             if (cancelled) return;
+
+            const remoteKosong =
+              (!remote.products || remote.products.length === 0) &&
+              (!remote.transactions || remote.transactions.length === 0) &&
+              !remote.settings;
+
+            if (remoteKosong) {
+              // Akun Google baru pertama kali masuk → isi Firestore dengan
+              // katalog default, lalu tampilkan katalog itu (jangan biarkan
+              // cache lokal pengguna sebelumnya ikut terbaca).
+              const produkAwal = dummyProducts.map(normalizeProduct);
+              const setelanAwal = normalizeSettings(DEFAULT_SETTINGS);
+
+              await seedDataAwal(uid, produkAwal, setelanAwal);
+              if (cancelled) return;
+
+              applyRemote({
+                products: produkAwal,
+                productMeta: [],
+                transactions: [],
+                tables: [],
+                orders: [],
+                customers: [],
+                debts: [],
+                settings: setelanAwal,
+                categories: [],
+              });
+              return;
+            }
+
             applyRemote(remote);
           } catch (err) {
             console.warn(
@@ -742,6 +816,7 @@ export function DataProvider({ children }) {
       productMeta,
       transactions,
       settings,
+      minStockThreshold: settings.minStockThreshold || 5,
       tables,
       orders,
       customers,
@@ -750,6 +825,8 @@ export function DataProvider({ children }) {
 
       storeProfile,
       printerSettings,
+      paymentMethods,
+      updatePaymentSettings,
 
       addCategory,
       deleteCategory,
@@ -799,6 +876,8 @@ export function DataProvider({ children }) {
       categories,
       storeProfile,
       printerSettings,
+      paymentMethods,
+      updatePaymentSettings,
       addCategory,
       deleteCategory,
       addProduct,

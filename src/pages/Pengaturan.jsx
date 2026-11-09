@@ -18,12 +18,13 @@ import {
   ImageOff,
   X,
   QrCode,
-  Loader2,
-  Unlink,
+  Percent,
+  AlertTriangle,
+  Sparkles,
+  Tag,
 } from 'lucide-react';
-import { onAuthStateChanged, linkWithPopup, unlink, GoogleAuthProvider } from 'firebase/auth';
+import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../firebase';
-import { googleProvider } from '../config/auth';
 import GoogleIcon from '../components/common/GoogleIcon';
 import Logo from '../components/common/Logo';
 import LogoWatermark from '../components/common/LogoWatermark';
@@ -33,6 +34,7 @@ import { getNotifPrefs, saveNotifPrefs } from '../utils/storage';
 
 const tabs = [
   { id: 'profil', label: 'Profil & Branding', icon: Store },
+  { id: 'pajak', label: 'Pajak Transaksi', icon: Percent },
   { id: 'meja', label: 'Meja & QRIS', icon: Table2 },
   { id: 'notifikasi', label: 'Notifikasi', icon: Bell },
   { id: 'keamanan', label: 'Keamanan', icon: Shield },
@@ -55,42 +57,125 @@ function Toggle({ enabled, onChange, label, desc }) {
 }
 
 export default function Pengaturan() {
-  const { storeProfile, updateStoreProfile, printerSettings, updatePrinterSettings, tables, addTable, updateTable, deleteTable } = useData();
+  const {
+    settings,
+    updateSettings,
+    products,
+    productMeta,
+    storeProfile,
+    updateStoreProfile,
+    printerSettings,
+    updatePrinterSettings,
+    paymentMethods,
+    updatePaymentSettings,
+    tables,
+    addTable,
+    updateTable,
+    deleteTable,
+    formatRupiah,
+  } = useData();
   const [googleLinked, setGoogleLinked] = useState(false);
   const [googleEmail, setGoogleEmail] = useState('');
-  const [googleBusy, setGoogleBusy] = useState(false);
   const [activeTab, setActiveTab] = useState('profil');
   const [toast, setToast] = useState('');
   const [form, setForm] = useState(storeProfile || { nama: '', pemilik: '', alamat: '', telepon: '', email: '', footerStruk: '' });
 
   const paperSize = printerSettings.paperSize || '58';
 
+  const metaMap = React.useMemo(() => {
+    const map = {};
+    for (const m of productMeta || []) {
+      if (m && m.productId) map[m.productId] = m;
+    }
+    return map;
+  }, [productMeta]);
+
+  const [pajakForm, setPajakForm] = useState({
+    aktif: Boolean(settings?.pajakTransaksiAktif),
+    jenis: settings?.pajakTransaksiJenis || 'PPN',
+    persen: settings?.pajakTransaksiPersen !== undefined ? settings.pajakTransaksiPersen : 10,
+  });
+
+  useEffect(() => {
+    if (settings) {
+      setPajakForm({
+        aktif: Boolean(settings.pajakTransaksiAktif),
+        jenis: settings.pajakTransaksiJenis || 'PPN',
+        persen: settings.pajakTransaksiPersen !== undefined ? settings.pajakTransaksiPersen : 10,
+      });
+    }
+  }, [settings?.pajakTransaksiAktif, settings?.pajakTransaksiJenis, settings?.pajakTransaksiPersen]);
+
+  const [minStockInput, setMinStockInput] = useState(settings?.minStockThreshold || 5);
+  useEffect(() => {
+    if (settings?.minStockThreshold) {
+      setMinStockInput(settings.minStockThreshold);
+    }
+  }, [settings?.minStockThreshold]);
+
   const [toggles, setTogglesState] = useState(() => {
     const prefs = getNotifPrefs();
     return {
       notifTransaksi: prefs.notifTransaksi ?? true,
       notifStok: prefs.notifStok ?? true,
+      notifStokHabis: prefs.notifStokHabis ?? true,
       notifPromo: prefs.notifPromo ?? false,
       printerThermal: true,
       autoCetak: printerSettings?.autoPrint ?? true,
     };
   });
 
-  const setToggles = (newVal) => {
+  const [browserNotifPerm, setBrowserNotifPerm] = useState(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      return Notification.permission;
+    }
+    return 'unsupported';
+  });
+
+  const requestBrowserNotif = async () => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      try {
+        const perm = await Notification.requestPermission();
+        setBrowserNotifPerm(perm);
+        if (perm === 'granted') {
+          showToast('Izin notifikasi browser berhasil diaktifkan');
+        } else {
+          showToast('Izin notifikasi browser belum diberikan');
+        }
+      } catch {
+        showToast('Gagal meminta izin notifikasi browser');
+      }
+    }
+  };
+
+  const setToggles = (newVal, message) => {
     setTogglesState(newVal);
     saveNotifPrefs({
       notifTransaksi: newVal.notifTransaksi,
       notifStok: newVal.notifStok,
+      notifStokHabis: newVal.notifStokHabis,
       notifPromo: newVal.notifPromo,
     });
+    showToast(message || 'Pengaturan notifikasi berhasil diperbarui');
   };
 
-  const [paymentEnabled, setPaymentEnabled] = useState({
-    Tunai: true,
-    QRIS: true,
-    Transfer: true,
-    'Kartu Debit': false,
-  });
+  const savePajakSettings = (e) => {
+    if (e) e.preventDefault();
+    updateSettings({
+      pajakTransaksiAktif: Boolean(pajakForm.aktif),
+      pajakTransaksiJenis: pajakForm.jenis || 'PPN',
+      pajakTransaksiPersen: Math.min(100, Math.max(0, Number(pajakForm.persen) || 0)),
+    });
+    showToast('Pengaturan pajak transaksi berhasil disimpan');
+  };
+
+  const handleMinStockChange = (e) => {
+    const val = Number(e.target.value);
+    setMinStockInput(e.target.value);
+    if (val > 0) {
+      updateSettings({ minStockThreshold: val });
+    }
+  };
 
   const [tableForm, setTableForm] = useState({ name: '' });
   const [editingTable, setEditingTable] = useState(null);
@@ -102,7 +187,7 @@ export default function Pengaturan() {
     setTimeout(() => setToast(''), 2500);
   };
 
-  // Status koneksi Google untuk akun Qurma yang sedang login.
+  // Status akun Google yang sedang dipakai untuk login (Google-only).
   useEffect(() => {
     let unsub = () => {};
     try {
@@ -123,40 +208,6 @@ export default function Pengaturan() {
       if (typeof unsub === 'function') unsub();
     };
   }, []);
-
-  const handleLinkGoogle = async () => {
-    if (!auth.currentUser) return;
-    setGoogleBusy(true);
-    try {
-      await linkWithPopup(auth.currentUser, googleProvider);
-      showToast('Akun Google berhasil dihubungkan');
-    } catch (err) {
-      const code = err && err.code ? err.code : '';
-      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
-        return;
-      }
-      if (code === 'auth/credential-already-in-use' || code === 'auth/account-exists-with-different-credential') {
-        showToast('Akun Google ini sudah terhubung ke akun lain. Gunakan akun Google lain.');
-        return;
-      }
-      showToast('Gagal menghubungkan Google. Coba lagi.');
-    } finally {
-      setGoogleBusy(false);
-    }
-  };
-
-  const handleUnlinkGoogle = async () => {
-    if (!auth.currentUser) return;
-    setGoogleBusy(true);
-    try {
-      await unlink(auth.currentUser, GoogleAuthProvider.PROVIDER_ID);
-      showToast('Koneksi Google dilepas dari akun Qurma');
-    } catch (err) {
-      showToast('Gagal melepas koneksi Google.');
-    } finally {
-      setGoogleBusy(false);
-    }
-  };
 
   const saveProfile = (e) => {
     e.preventDefault();
@@ -353,6 +404,106 @@ export default function Pengaturan() {
                       className="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-600/30 transition hover:bg-emerald-500"
                     >
                       Simpan Profil
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {activeTab === 'pajak' && (
+                <form onSubmit={savePajakSettings} className="space-y-5">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-800">Pajak Transaksi Toko</h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Konfigurasi pajak umum yang berlaku pada transaksi kasir.
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-800">Status Pajak Transaksi</p>
+                        <p className="text-xs text-slate-500">
+                          Aktifkan pemungutan pajak pada nota transaksi
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextAktif = !pajakForm.aktif;
+                          setPajakForm({ ...pajakForm, aktif: nextAktif });
+                          updateSettings({ pajakTransaksiAktif: nextAktif });
+                          showToast(`Pajak transaksi ${nextAktif ? 'diaktifkan' : 'dinonaktifkan'}`);
+                        }}
+                        className="text-emerald-600 transition"
+                      >
+                        {pajakForm.aktif ? <ToggleRight size={32} /> : <ToggleLeft size={32} className="text-slate-300" />}
+                      </button>
+                    </div>
+
+                    {pajakForm.aktif && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4 border-t border-slate-100">
+                        <div>
+                          <label className="mb-1.5 block text-xs font-semibold text-slate-600">
+                            Jenis Pajak
+                          </label>
+                          <input
+                            value={pajakForm.jenis}
+                            onChange={(e) => setPajakForm({ ...pajakForm, jenis: e.target.value })}
+                            className={inputClass}
+                            placeholder="cth: PPN, PB1, Service"
+                            required
+                          />
+                          <p className="mt-1 text-[11px] text-slate-400">
+                            Nama pajak yang tercetak pada struk belanja.
+                          </p>
+                        </div>
+
+                        <div>
+                          <label className="mb-1.5 block text-xs font-semibold text-slate-600">
+                            Tarif Pajak (%)
+                          </label>
+                          <div className="relative">
+                            <input
+                              type="number"
+                              min="0"
+                              max="100"
+                              step="0.5"
+                              value={pajakForm.persen}
+                              onChange={(e) => setPajakForm({ ...pajakForm, persen: e.target.value })}
+                              className={`${inputClass} pr-8`}
+                              placeholder="10"
+                              required
+                            />
+                            <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
+                              %
+                            </span>
+                          </div>
+                          <p className="mt-1 text-[11px] text-slate-400">
+                            Persentase pajak yang dihitung dari DPP transaksi.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Anti Double-Taxation Explanatory Alert */}
+                  <div className="flex items-start gap-2.5 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4">
+                    <Info size={16} className="text-emerald-700 shrink-0 mt-0.5" />
+                    <div className="text-xs text-slate-700 space-y-1 leading-relaxed">
+                      <p className="font-bold text-emerald-900">Perlindungan Anti Pajak Ganda (No Double-Taxation):</p>
+                      <p>
+                        Sistem secara otomatis menerapkan Pajak Transaksi hanya pada barang yang <b>tidak memiliki Pajak Barang mandiri</b>.
+                        Jika suatu barang sudah memiliki tarif pajak per item di menu Barang, barang tersebut tidak akan dikenakan Pajak Transaksi lagi.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-3 border-t border-slate-100 pt-4">
+                    <button
+                      type="submit"
+                      className="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-600/30 transition hover:bg-emerald-500"
+                    >
+                      Simpan Pengaturan Pajak
                     </button>
                   </div>
                 </form>
@@ -593,28 +744,216 @@ export default function Pengaturan() {
                 </div>
               )}
 
-              {activeTab === 'notifikasi' && (
-                <div className="divide-y divide-slate-100">
-                  <Toggle
-                    enabled={toggles.notifTransaksi}
-                    onChange={(v) => setToggles({ ...toggles, notifTransaksi: v })}
-                    label="Notifikasi Transaksi"
-                    desc="Kirim notifikasi setiap ada transaksi baru"
-                  />
-                  <Toggle
-                    enabled={toggles.notifStok}
-                    onChange={(v) => setToggles({ ...toggles, notifStok: v })}
-                    label="Peringatan Stok Menipis"
-                    desc="Beritahu saat stok barang di bawah batas minimum"
-                  />
-                  <Toggle
-                    enabled={toggles.notifPromo}
-                    onChange={(v) => setToggles({ ...toggles, notifPromo: v })}
-                    label="Promo & Info Terbaru"
-                    desc="Dapatkan informasi update fitur Qurmacel POS"
-                  />
-                </div>
-              )}
+              {activeTab === 'notifikasi' && (() => {
+                const lowStockThreshold = Number(minStockInput) > 0 ? Number(minStockInput) : 5;
+                const lowStockItems = products.filter(
+                  (p) => p.status === 'Aktif' && Number(p.stok || 0) > 0 && Number(p.stok || 0) <= lowStockThreshold
+                );
+                const outOfStockItems = products.filter(
+                  (p) => p.status === 'Aktif' && Number(p.stok || 0) <= 0
+                );
+                const activePromoItems = products.filter(
+                  (p) => p.status === 'Aktif' && metaMap[p.id]?.promoActive
+                );
+
+                return (
+                  <div className="space-y-6">
+                    <div className="divide-y divide-slate-100">
+                      <div>
+                        <Toggle
+                          enabled={toggles.notifTransaksi}
+                          onChange={(v) => setToggles({ ...toggles, notifTransaksi: v }, `Notifikasi transaksi baru ${v ? 'diaktifkan' : 'dinonaktifkan'}`)}
+                          label="Notifikasi Transaksi Baru"
+                          desc="Kirim notifikasi di browser dan banner saat pembayaran transaksi baru selesai"
+                        />
+                        <div className="pb-3 pl-1 flex items-center gap-2">
+                          <span className="text-xs text-slate-500">Izin Browser:</span>
+                          {browserNotifPerm === 'granted' ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                              <Check size={11} /> Diizinkan
+                            </span>
+                          ) : browserNotifPerm === 'denied' ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
+                              Diblokir di Pengaturan Browser
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={requestBrowserNotif}
+                              className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 border border-emerald-300 px-2.5 py-1 text-xs font-bold text-emerald-700 hover:bg-emerald-100 transition"
+                            >
+                              <Bell size={12} />
+                              Minta Izin Notifikasi Browser
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      <Toggle
+                        enabled={toggles.notifStok}
+                        onChange={(v) => setToggles({ ...toggles, notifStok: v }, `Peringatan stok menipis ${v ? 'diaktifkan' : 'dinonaktifkan'}`)}
+                        label="Peringatan Stok Menipis"
+                        desc="Tampilkan status peringatan saat stok produk berada di bawah batas minimum"
+                      />
+
+                      <Toggle
+                        enabled={toggles.notifStokHabis}
+                        onChange={(v) => setToggles({ ...toggles, notifStokHabis: v }, `Peringatan stok habis ${v ? 'diaktifkan' : 'dinonaktifkan'}`)}
+                        label="Notifikasi Stok Habis"
+                        desc="Tampilkan status peringatan saat produk aktif memiliki stok 0 (habis)"
+                      />
+
+                      <Toggle
+                        enabled={toggles.notifPromo}
+                        onChange={(v) => setToggles({ ...toggles, notifPromo: v }, `Info promo & update ${v ? 'diaktifkan' : 'dinonaktifkan'}`)}
+                        label="Promo & Info Terbaru"
+                        desc="Tampilkan ringkasan promosi aktif barang dan status versi aplikasi"
+                      />
+                    </div>
+
+                    {/* Threshold Setting Section */}
+                    <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                          <h4 className="text-sm font-bold text-slate-800">
+                            Batas Minimum Stok (Threshold Peringatan)
+                          </h4>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            Produk aktif dengan stok sama atau di bawah angka ini akan ditandai menipis.
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min="1"
+                            max="1000"
+                            value={minStockInput}
+                            onChange={handleMinStockChange}
+                            onBlur={() => {
+                              const val = Math.max(1, Number(minStockInput) || 5);
+                              setMinStockInput(val);
+                              updateSettings({ minStockThreshold: val });
+                              showToast(`Batas minimum stok disimpan (${val})`);
+                            }}
+                            className="w-24 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-center text-sm font-extrabold text-slate-800 outline-none focus:border-emerald-500 focus:bg-white"
+                          />
+                          <span className="text-xs font-semibold text-slate-500">Unit / Pcs</span>
+                        </div>
+                      </div>
+
+                      {/* Live Status of Low Stock Products */}
+                      <div className="pt-2 border-t border-slate-100">
+                        {lowStockItems.length > 0 ? (
+                          <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3 flex items-start gap-2.5">
+                            <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                            <div className="text-xs text-amber-900 flex-1">
+                              <p className="font-bold">
+                                Ditemukan {lowStockItems.length} barang aktif dengan stok menipis (≤ {lowStockThreshold}):
+                              </p>
+                              <div className="mt-1 flex flex-wrap gap-1.5">
+                                {lowStockItems.slice(0, 6).map((item) => (
+                                  <span
+                                    key={item.id}
+                                    className="rounded-md bg-white border border-amber-200 px-2 py-0.5 text-[11px] font-semibold text-amber-800 shadow-2xs"
+                                  >
+                                    {item.nama} · <b className="text-red-600">{item.stok} {item.satuan || 'pcs'}</b>
+                                  </span>
+                                ))}
+                                {lowStockItems.length > 6 && (
+                                  <span className="text-[11px] text-amber-700 py-0.5 font-medium">
+                                    +{lowStockItems.length - 6} lainnya
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 flex items-center gap-2 text-xs text-emerald-800">
+                            <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                            <span>Semua barang aktif saat ini berada dalam batas stok aman ({'>'} {lowStockThreshold} unit).</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Out of Stock Status Section */}
+                    {outOfStockItems.length > 0 && (
+                      <div className="rounded-2xl border border-red-200 bg-red-50/60 p-5 space-y-2">
+                        <div className="flex items-center gap-2 text-red-800 font-bold text-sm">
+                          <AlertTriangle size={16} className="text-red-600" />
+                          <span>Peringatan Stok Habis (0 Unit)</span>
+                        </div>
+                        <p className="text-xs text-red-700">
+                          Terdapat <b>{outOfStockItems.length}</b> barang aktif yang stoknya habis:
+                        </p>
+                        <div className="flex flex-wrap gap-1.5 pt-1">
+                          {outOfStockItems.slice(0, 8).map((item) => (
+                            <span
+                              key={item.id}
+                              className="rounded-md bg-white border border-red-200 px-2 py-0.5 text-[11px] font-bold text-red-700"
+                            >
+                              {item.nama} (0 {item.satuan || 'pcs'})
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Live Promos Section */}
+                    <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Sparkles size={16} className="text-emerald-600" />
+                          <h4 className="text-sm font-bold text-slate-800">
+                            Daftar Promo Aktif di Aplikasi
+                          </h4>
+                        </div>
+                        <span className="text-[11px] font-semibold text-slate-400">
+                          Versi Sistem: 2.4.0
+                        </span>
+                      </div>
+
+                      {activePromoItems.length > 0 ? (
+                        <div className="space-y-2">
+                          <p className="text-xs text-slate-600">
+                            Saat ini ada <b>{activePromoItems.length}</b> barang dengan promosi yang aktif:
+                          </p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            {activePromoItems.map((item) => {
+                              const meta = metaMap[item.id];
+                              const promoDisc = meta?.promoType === 'persen' ? `${meta.promoValue}%` : formatRupiah(meta?.promoValue || 0);
+                              return (
+                                <div
+                                  key={item.id}
+                                  className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50/60 p-3 text-xs"
+                                >
+                                  <div className="min-w-0 flex-1 pr-2">
+                                    <p className="font-bold text-slate-800 truncate">{item.nama}</p>
+                                    <p className="text-[11px] text-slate-500">{meta?.promoTitle || 'Promosi Toko'}</p>
+                                  </div>
+                                  <span className="shrink-0 rounded-lg bg-red-100 text-red-700 px-2 py-1 text-[11px] font-extrabold">
+                                    Potongan {promoDisc}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/50 p-4 text-center">
+                          <Tag size={20} className="mx-auto text-slate-300 mb-1" />
+                          <p className="text-xs font-semibold text-slate-600">
+                            Saat ini tidak ada promo yang aktif di aplikasi.
+                          </p>
+                          <p className="text-[11px] text-slate-400 mt-0.5">
+                            Anda dapat mengaktifkan promo atau Buy 1 Get 1 melalui menu Informasi Barang.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {activeTab === 'keamanan' && (
                 <div className="space-y-4">
@@ -637,47 +976,24 @@ export default function Pengaturan() {
                             </span>
                           ) : (
                             <span className="inline-flex items-center gap-1 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
-                              Belum terhubung
+                              Tidak aktif
                             </span>
                           )}
                         </div>
                         <p className="mt-1 text-xs leading-relaxed text-slate-500">
                           {googleLinked
-                            ? `Akun Google: ${googleEmail || auth.currentUser?.email || '-'}`
-                            : 'Hubungkan akun Google agar bisa masuk dengan tombol "Masuk dengan Google" di halaman login.'}
+                            ? `Anda masuk dengan akun Google: ${googleEmail || auth.currentUser?.email || '-'}`
+                            : 'Aplikasi ini menggunakan login Google-only.'}
                         </p>
                       </div>
-                    </div>
-
-                    <div className="mt-4 border-t border-slate-200 pt-4">
-                      {googleLinked ? (
-                        <button
-                          type="button"
-                          disabled={googleBusy}
-                          onClick={handleUnlinkGoogle}
-                          className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-white px-4 py-2.5 text-sm font-semibold text-red-600 transition hover:bg-red-50 disabled:opacity-60"
-                        >
-                          {googleBusy ? <Loader2 size={15} className="animate-spin" /> : <Unlink size={15} />}
-                          Lepas Koneksi Google
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          disabled={googleBusy}
-                          onClick={handleLinkGoogle}
-                          className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:bg-slate-50 disabled:opacity-60"
-                        >
-                          {googleBusy ? <Loader2 size={15} className="animate-spin" /> : <GoogleIcon size={15} />}
-                          Hubungkan Google
-                        </button>
-                      )}
                     </div>
                   </div>
 
                   <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
-                    <p className="text-sm font-semibold text-slate-700">Lupa Password</p>
+                    <p className="text-sm font-semibold text-slate-700">Keamanan Akun</p>
                     <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                      Gunakan tombol "Lupa password?" di halaman login. Tautan reset akan dikirim ke email akun Qurma.
+                      Kata sandi dan verifikasi identitas dikelola sepenuhnya oleh Google.
+                      Untuk mengubah kata sandi atau keamanan akun, buka pengaturan akun Google Anda.
                     </p>
                   </div>
                 </div>
@@ -759,20 +1075,125 @@ export default function Pengaturan() {
               )}
 
               {activeTab === 'pembayaran' && (
-                <div className="space-y-4">
-                  <p className="text-sm text-slate-500">Aktifkan metode pembayaran yang tersedia.</p>
-                  {Object.entries(paymentEnabled).map(([key, value]) => (
-                    <div key={key} className="flex items-center justify-between rounded-2xl border border-slate-100 bg-slate-50/50 px-4 py-3">
-                      <p className="text-sm font-semibold text-slate-700">{key}</p>
-                      <button
-                        onClick={() => setPaymentEnabled({ ...paymentEnabled, [key]: !value })}
-                        className="text-emerald-600"
-                        aria-label={key}
+                <div className="space-y-6">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-800">Metode Pembayaran Kasir</h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Pilih metode pembayaran yang diizinkan untuk transaksi baru. Metode yang dinonaktifkan di sini otomatis tidak akan muncul di halaman Transaksi/Kasir.
+                    </p>
+                  </div>
+
+                  <div className="space-y-4">
+                    {[
+                      {
+                        category: 'Tunai',
+                        desc: 'Transaksi tunai fisik langsung di kasir.',
+                        items: [
+                          { id: 'Tunai', label: 'Tunai (Cash)', desc: 'Menerima pembayaran uang tunai fisik' },
+                        ],
+                      },
+                      {
+                        category: 'QRIS',
+                        desc: 'Standar pembayaran digital satu QR untuk semua e-wallet & mobile banking.',
+                        items: [
+                          { id: 'QRIS', label: 'QRIS', desc: 'Scan QRIS dari semua aplikasi e-wallet & perbankan' },
+                        ],
+                      },
+                      {
+                        category: 'Dompet Digital (E-Wallet)',
+                        desc: 'Pembayaran melalui aplikasi dompet digital nasional.',
+                        items: [
+                          { id: 'GoPay', label: 'GoPay', desc: 'Konfirmasi pembayaran via GoPay' },
+                          { id: 'OVO', label: 'OVO', desc: 'Konfirmasi pembayaran via OVO' },
+                          { id: 'DANA', label: 'DANA', desc: 'Konfirmasi pembayaran via DANA' },
+                          { id: 'ShopeePay', label: 'ShopeePay', desc: 'Konfirmasi pembayaran via ShopeePay' },
+                          { id: 'LinkAja', label: 'LinkAja', desc: 'Konfirmasi pembayaran via LinkAja' },
+                        ],
+                      },
+                      {
+                        category: 'Transfer Bank',
+                        desc: 'Transfer langsung ke rekening toko (BCA, Mandiri, BRI, BNI, dll).',
+                        items: [
+                          { id: 'Transfer Bank', label: 'Transfer Bank', desc: 'Konfirmasi manual bukti transfer bank toko' },
+                        ],
+                      },
+                      {
+                        category: 'Kartu Debit & Kredit',
+                        desc: 'Pembayaran melalui mesin EDC kartu perbankan.',
+                        items: [
+                          { id: 'Kartu Debit', label: 'Kartu Debit', desc: 'Menerima gesek/tap kartu debit bank' },
+                          { id: 'Kartu Kredit', label: 'Kartu Kredit', desc: 'Menerima kartu kredit Visa / Mastercard' },
+                        ],
+                      },
+                    ].map((group) => (
+                      <div
+                        key={group.category}
+                        className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs space-y-3"
                       >
-                        {value ? <ToggleRight size={30} /> : <ToggleLeft size={30} className="text-slate-300" />}
-                      </button>
-                    </div>
-                  ))}
+                        <div className="border-b border-slate-100 pb-2">
+                          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                            {group.category}
+                          </h4>
+                          <p className="text-[11px] text-slate-400 mt-0.5">{group.desc}</p>
+                        </div>
+
+                        <div className="divide-y divide-slate-100">
+                          {group.items.map((item) => {
+                            const isEnabled = Boolean(paymentMethods?.[item.id] ?? true);
+
+                            const handleToggle = () => {
+                              const activeCount = Object.entries(paymentMethods || {}).filter(
+                                ([k, v]) => Boolean(v)
+                              ).length;
+
+                              if (isEnabled && activeCount <= 1) {
+                                showToast('Minimal satu metode pembayaran harus tetap aktif');
+                                return;
+                              }
+
+                              const nextState = !isEnabled;
+                              updatePaymentSettings({ [item.id]: nextState });
+                              showToast(
+                                `${item.label} ${nextState ? 'diaktifkan' : 'dinonaktifkan'}`
+                              );
+                            };
+
+                            return (
+                              <div
+                                key={item.id}
+                                className="flex items-center justify-between py-2.5"
+                              >
+                                <div>
+                                  <p className="text-xs font-bold text-slate-800">{item.label}</p>
+                                  <p className="text-[11px] text-slate-400">{item.desc}</p>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={handleToggle}
+                                  className="text-emerald-600 transition"
+                                  aria-label={`Toggle ${item.label}`}
+                                >
+                                  {isEnabled ? (
+                                    <ToggleRight size={28} className="text-emerald-600" />
+                                  ) : (
+                                    <ToggleLeft size={28} className="text-slate-300" />
+                                  )}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex items-start gap-2.5 rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4 text-xs text-slate-600">
+                    <Info size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+                    <p className="leading-relaxed">
+                      Status aktif/nonaktif di atas langsung berlaku untuk semua kasir pada halaman Transaksi. Pembayaran non-tunai tetap membutuhkan verifikasi manual bukti bayar oleh kasir untuk keamanan toko.
+                    </p>
+                  </div>
                 </div>
               )}
             </div>

@@ -43,7 +43,7 @@ export function ToastProvider({ children }) {
                 className="pointer-events-auto flex w-full items-center gap-3 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-medium text-white shadow-xl"
               >
                 <Icon size={18} className={`shrink-0 ${accent}`} />
-                <span className="flex-1">{message}</span>
+                <span className="flex-1">{t.message}</span>
                 <button
                   onClick={() => dismiss(t.id)}
                   className="rounded-md p-0.5 text-slate-400 transition hover:text-white"

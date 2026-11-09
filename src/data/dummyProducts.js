@@ -2,6 +2,19 @@ export const DEFAULT_CATEGORIES = ['Makanan', 'Minuman', 'Cemilan', 'Sembako', '
 
 export const DEFAULT_UNITS = ['pcs', 'botol', 'bungkus', 'sachet', 'kg', 'liter'];
 
+export const DEFAULT_PAYMENT_METHODS = {
+  Tunai: true,
+  QRIS: true,
+  GoPay: true,
+  OVO: true,
+  DANA: true,
+  ShopeePay: true,
+  LinkAja: true,
+  'Transfer Bank': true,
+  'Kartu Debit': true,
+  'Kartu Kredit': false,
+};
+
 export const DEFAULT_SETTINGS = {
   storeName: 'WarungKu',
   address: 'Jl. Raya Warung No. 1',
@@ -9,6 +22,11 @@ export const DEFAULT_SETTINGS = {
   footer: 'Terima kasih telah berbelanja.',
   pemilik: '',
   email: '',
+  paymentMethods: DEFAULT_PAYMENT_METHODS,
+  pajakTransaksiAktif: false,
+  pajakTransaksiJenis: 'PPN',
+  pajakTransaksiPersen: 10,
+  minStockThreshold: 5,
 };
 
 function makePlaceholder(label, c1, c2) {
