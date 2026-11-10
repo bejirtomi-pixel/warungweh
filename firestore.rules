@@ -1,0 +1,140 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isSuperAdminEmail() {
+      return isAuthenticated() &&
+        request.auth.token.email != null &&
+        request.auth.token.email.lower() == 'qurmacel@gmail.com';
+    }
+
+    function isAdminEmail() {
+      return isAuthenticated() &&
+        request.auth.token.email != null &&
+        request.auth.token.email.lower() == 'admin@gmail.com';
+    }
+
+    function hasUserDoc() {
+      return isAuthenticated() && exists(/databases/$(database)/documents/app_users/$(request.auth.uid));
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/app_users/$(request.auth.uid)).data;
+    }
+
+    function isSuperAdmin() {
+      return isSuperAdminEmail() || (
+        hasUserDoc() && (
+          getUserData().role in ['SUPER_ADMIN', 'super_admin'] ||
+          (getUserData().email != null && getUserData().email.lower() == 'qurmacel@gmail.com')
+        )
+      );
+    }
+
+    function isAdmin() {
+      return isSuperAdmin() || isAdminEmail() || (
+        hasUserDoc() && (
+          getUserData().role in ['ADMIN', 'admin'] ||
+          (getUserData().email != null && getUserData().email.lower() == 'admin@gmail.com')
+        )
+      );
+    }
+
+    function isActiveStaff() {
+      return isSuperAdmin() || isAdmin() || (
+        hasUserDoc() && (
+          getUserData().status in ['active', 'approved']
+        )
+      );
+    }
+
+    function hasPermission(perm) {
+      return isSuperAdmin() || (
+        isActiveStaff() && (
+          hasUserDoc() && getUserData().permissions != null &&
+          getUserData().permissions.hasAny(['*', perm])
+        )
+      );
+    }
+
+    // 1. App Users collection
+    match /app_users/{userId} {
+      allow read: if isOwner(userId) || isSuperAdmin() || isAdmin() || hasPermission('pengguna.view');
+      allow create: if isOwner(userId) || isSuperAdmin();
+      allow update: if isOwner(userId) || isSuperAdmin();
+      allow delete: if isSuperAdmin() && request.auth.uid != userId;
+    }
+
+    // 2. Registration Requests collection
+    match /registration_requests/{requestId} {
+      allow read: if isAuthenticated() && (
+        resource.data.uid == request.auth.uid ||
+        isSuperAdmin() ||
+        hasPermission('pengguna.approve')
+      );
+      allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
+      allow update: if isSuperAdmin() || hasPermission('pengguna.approve');
+      allow delete: if isSuperAdmin();
+    }
+
+    // 3. Tables collection
+    match /tables/{tableId} {
+      allow read: if true;
+      allow create, update, delete: if isSuperAdmin() || isAdmin() || hasPermission('meja.update');
+    }
+
+    // 4. Table Sessions collection
+    match /table_sessions/{sessionId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || isAdmin() || hasPermission('meja.session_open');
+      allow update: if isSuperAdmin() || isAdmin() || hasPermission('meja.session_close') || hasPermission('dinein.manage_payment') || true;
+      allow delete: if isSuperAdmin();
+    }
+
+    // 5. Orders collection (Dine In & Takeaway)
+    match /orders/{orderId} {
+      allow read: if true;
+      allow create: if true;
+      allow update: if isSuperAdmin() || isAdmin() || hasPermission('dinein.update_order_status') || hasPermission('dinein.accept_order');
+      allow delete: if isSuperAdmin();
+    }
+
+    // 6. Products / Barang
+    match /products/{productId} {
+      allow read: if true;
+      allow create: if isSuperAdmin() || isAdmin() || hasPermission('barang.create');
+      allow update: if isSuperAdmin() || isAdmin() || hasPermission('barang.update');
+      allow delete: if isSuperAdmin() || hasPermission('barang.delete');
+    }
+
+    // 7. Transactions collection
+    match /transactions/{transactionId} {
+      allow read: if isSuperAdmin() || isAdmin() || hasPermission('page.laporan') || hasPermission('page.transaksi');
+      allow create: if isSuperAdmin() || isAdmin() || hasPermission('transaksi.pos_access');
+      allow update: if isSuperAdmin();
+      allow delete: if isSuperAdmin();
+    }
+
+    // 8. Activity Logs (Audit Trail — Immutable)
+    match /activity_logs/{logId} {
+      allow read: if isSuperAdmin() || hasPermission('page.riwayat_aktivitas');
+      allow create: if isAuthenticated();
+      allow update, delete: if false;
+    }
+
+    // 9. Store Settings
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isSuperAdmin() || hasPermission('pengaturan.update');
+    }
+  }
+}

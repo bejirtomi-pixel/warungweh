@@ -28,8 +28,10 @@ import {
   DollarSign,
   ChevronRight,
   CreditCard,
+  Play,
 } from 'lucide-react';
 import { useData } from '../context/DataContext';
+import { useAuth } from '../context/AuthContext';
 import LogoWatermark from '../components/common/LogoWatermark';
 import {
   generateTableQrDataUrl,
@@ -39,6 +41,7 @@ import {
 
 export default function Meja() {
   const navigate = useNavigate();
+  const { user: currentStaff, currentUserDisplay, hasPermission, isSuperAdmin } = useAuth();
   const {
     tables = [],
     tableSessions = [],
@@ -47,6 +50,7 @@ export default function Meja() {
     updateTable,
     deleteTable,
     regenerateTableQr,
+    openTableSession,
     closeTableSession,
     transactions = [],
     storeProfile,
@@ -80,6 +84,11 @@ export default function Meja() {
   const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [selectedTableForDetail, setSelectedTableForDetail] = useState(null);
 
+  // Buka Sesi Modal State
+  const [openSessionModalOpen, setOpenSessionModalOpen] = useState(false);
+  const [tableToOpenSession, setTableToOpenSession] = useState(null);
+  const [sessionCustomerNameInput, setSessionCustomerNameInput] = useState('');
+
   // Settlement / Tutup Sesi Modal
   const [settleModalOpen, setSettleModalOpen] = useState(false);
   const [sessionToSettle, setSessionToSettle] = useState(null);
@@ -91,6 +100,23 @@ export default function Meja() {
   const showToast = (message, type = 'success') => {
     setToast({ show: true, message, type });
     setTimeout(() => setToast({ show: false, message: '', type: 'success' }), 3000);
+  };
+
+  const handleOpenStartSession = (table) => {
+    setTableToOpenSession(table);
+    setSessionCustomerNameInput(`Tamu ${table.name}`);
+    setOpenSessionModalOpen(true);
+  };
+
+  const handleConfirmOpenSession = () => {
+    if (!tableToOpenSession) return;
+    const newSession = openTableSession(tableToOpenSession.id, {
+      customerName: sessionCustomerNameInput.trim() || `Tamu ${tableToOpenSession.name}`,
+      kasirUid: currentStaff?.uid || 'KASIR',
+      kasirName: currentUserDisplay || 'Kasir',
+    });
+    setOpenSessionModalOpen(false);
+    showToast(`Sesi "${newSession.id}" untuk ${tableToOpenSession.name} berhasil diaktifkan!`);
   };
 
   // Helper mendapatkan Sesi Aktif per Meja (Satu Meja = Satu Sesi Aktif)
@@ -192,8 +218,8 @@ export default function Meja() {
     setQrModalOpen(true);
     setIsQrLoading(true);
     try {
-      // Direct payload ke halaman publik QR Menu
-      const payload = `${window.location.origin}/menu/${table.id}?token=${table.qrToken || table.id}`;
+      // Direct payload ke halaman publik QR Menu menggunakan token acak yang stabil
+      const payload = `${window.location.origin}/menu/${table.qrToken || table.id}`;
       const url = await generateTableQrDataUrl(payload, { width: 450 });
       setQrDataUrl(url);
     } catch (err) {
@@ -212,7 +238,7 @@ export default function Meja() {
       const updatedTable = { ...activeQrTable, qrToken: newToken };
       setActiveQrTable(updatedTable);
 
-      const payload = `${window.location.origin}/menu/${updatedTable.id}?token=${newToken}`;
+      const payload = `${window.location.origin}/menu/${newToken}`;
       const url = await generateTableQrDataUrl(payload, { width: 450 });
       setQrDataUrl(url);
       showToast(`QR Code ${updatedTable.name} berhasil diperbarui!`);
@@ -359,14 +385,40 @@ export default function Meja() {
 
   const handleConfirmCloseSession = () => {
     if (!sessionToSettle) return;
+
+    // Validasi: pastikan tidak ada order yang belum disajikan atau pending konfirmasi
+    const sessionOrdersList = orders.filter(
+      (o) => (sessionToSettle.orderIds || []).includes(o.id) && o.orderStatus !== 'cancelled' && o.orderStatus !== 'rejected'
+    );
+    const pendingOrders = sessionOrdersList.filter((o) => o.orderStatus === 'pending');
+    if (pendingOrders.length > 0) {
+      showToast(`Terdapat ${pendingOrders.length} pesanan yang masih menunggu konfirmasi. Terima atau tolak pesanan terlebih dahulu.`, 'error');
+      return;
+    }
+
+    const unserved = sessionOrdersList.filter(
+      (o) => o.fulfillmentStatus !== 'served'
+    );
+    if (unserved.length > 0) {
+      showToast(`Masih ada ${unserved.length} pesanan yang belum disajikan. Mohon selesaikan penyajian atau batalkan pesanan terlebih dahulu.`, 'error');
+      return;
+    }
+
     try {
-      closeTableSession(sessionToSettle.id, {
+      const res = closeTableSession(sessionToSettle.id, {
         paymentMethod: settlePaymentMethod,
         paymentCategory: settlePaymentMethod === 'Tunai' ? 'Tunai' : 'Digital',
         paid: sessionToSettle.total,
         change: 0,
-        kasir: 'Admin',
+        kasir: currentUserDisplay || 'Kasir',
+        kasirUid: currentStaff?.uid || 'KASIR',
       });
+
+      if (res?.success === false) {
+        showToast(res.reason || 'Gagal menutup sesi meja.', 'error');
+        return;
+      }
+
       setSettleModalOpen(false);
       setDetailModalOpen(false);
       showToast(`Sesi "${sessionToSettle.tableName}" berhasil diselesaikan & meja kembali tersedia.`);
@@ -660,21 +712,32 @@ export default function Meja() {
                     {/* Center & Right Actions */}
                     <div className="flex items-center gap-1">
                       {isOccupied ? (
-                        <button
-                          onClick={() => openDetailModal(table)}
-                          className="inline-flex items-center gap-1 rounded-xl bg-amber-500 px-3 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-amber-600 transition"
-                        >
-                          <Eye size={13} />
-                          Detail Sesi
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => openDetailModal(table)}
+                            className="inline-flex items-center gap-1 rounded-xl bg-amber-500 px-2.5 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-amber-600 transition"
+                            title="Lihat seluruh pesanan & tagihan sesi"
+                          >
+                            <Eye size={13} />
+                            <span>Detail</span>
+                          </button>
+                          <button
+                            onClick={() => navigate(`/transaksi?tableId=${table.id}`)}
+                            className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-2.5 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-500 transition"
+                            title="Tambah pesanan kasir ke sesi meja ini"
+                          >
+                            <Utensils size={13} />
+                            <span>+ Order</span>
+                          </button>
+                        </div>
                       ) : isTableActive ? (
                         <button
-                          onClick={() => navigate(`/transaksi?tableId=${table.id}`)}
+                          onClick={() => handleOpenStartSession(table)}
                           className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-500 transition"
-                          title="Buka pesanan kasir untuk meja ini"
+                          title="Buka sesi baru untuk meja ini"
                         >
-                          <Utensils size={13} />
-                          Pesan
+                          <Play size={13} />
+                          <span>Buka Sesi</span>
                         </button>
                       ) : null}
 
@@ -795,6 +858,73 @@ export default function Meja() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL BUKA SESI MEJA EKSPLISIT OLEH KASIR                      */}
+      {/* ============================================================== */}
+      {openSessionModalOpen && tableToOpenSession && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-slate-900/50 backdrop-blur-xs"
+            onClick={() => setOpenSessionModalOpen(false)}
+          />
+          <div className="relative z-10 w-full max-w-sm overflow-hidden rounded-3xl bg-white shadow-2xl p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                <Play size={18} className="text-emerald-600" />
+                Buka Sesi {tableToOpenSession.name}
+              </h3>
+              <button
+                onClick={() => setOpenSessionModalOpen(false)}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1.5">
+                  Nama Tamu / Pelanggan
+                </label>
+                <input
+                  type="text"
+                  autoFocus
+                  value={sessionCustomerNameInput}
+                  onChange={(e) => setSessionCustomerNameInput(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 focus:outline-emerald-500"
+                  placeholder="cth: Tamu Meja 01 / Kak Rian"
+                />
+              </div>
+
+              <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500 space-y-1 border border-slate-100">
+                <p><span className="font-semibold text-slate-700">Kasir Pembuka:</span> {currentStaff?.displayName || currentStaff?.email || 'Kasir'}</p>
+                <p><span className="font-semibold text-slate-700">Waktu Pembukaan:</span> {new Date().toLocaleTimeString('id-ID')}</p>
+                <p className="text-[11px] text-emerald-700 font-medium pt-1 border-t border-slate-200/60">
+                  * Setelah sesi dibuka, pelanggan dapat memindai QR meja untuk mengirim pesanan secara mandiri.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setOpenSessionModalOpen(false)}
+                className="rounded-xl px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmOpenSession}
+                className="rounded-xl bg-emerald-600 px-5 py-2 text-xs font-bold text-white shadow-md shadow-emerald-600/30 hover:bg-emerald-500 transition"
+              >
+                Buka Sesi Sekarang
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -996,8 +1126,19 @@ export default function Meja() {
               <div>
                 <p className="text-sm font-bold text-slate-800">{activeQrTable.name}</p>
                 <p className="text-xs text-slate-500 max-w-xs mx-auto mt-0.5">
-                  Pelanggan cukup memindai QR ini melalui kamera HP untuk melihat katalog menu dan memesan langsung.
+                  Pelanggan dapat memindai QR ini melalui kamera HP untuk melihat katalog menu dan memesan langsung.
                 </p>
+                <div className="pt-2">
+                  <a
+                    href={`/menu/${activeQrTable.qrToken || activeQrTable.id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-bold transition shadow-2xs"
+                  >
+                    <span>Buka Tampilan HP Pelanggan (Tab Baru)</span>
+                    <ArrowRight size={13} />
+                  </a>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2.5 pt-2">

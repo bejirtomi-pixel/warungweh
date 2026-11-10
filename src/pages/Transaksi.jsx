@@ -47,6 +47,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import LogoWatermark from '../components/common/LogoWatermark';
 import ProductDetailDrawer from '../components/ProductDetailDrawer';
 import { useData } from '../context/DataContext';
+import { useAuth } from '../context/AuthContext';
 import { openThermalReceipt, openOrderSlipReceipt } from '../utils/receipt';
 import { getSession, getNotifPrefs } from '../utils/storage';
 
@@ -153,6 +154,9 @@ function timeAgo(dateString) {
 }
 
 export default function Transaksi() {
+  const { currentUserDisplay, cashierOperator } = useAuth();
+  const currentKasirName = currentUserDisplay || 'Kasir';
+
   const {
     products,
     productMeta,
@@ -727,7 +731,7 @@ export default function Transaksi() {
           orderId: created.id,
           orderNumber: created.orderNumber,
           tanggal: tanggalStr,
-          kasir: getSession()?.nama || 'Admin',
+          kasir: currentKasirName,
           customer: guestName,
           items: cart.map((item) => ({
             id: item.id,
@@ -869,7 +873,7 @@ export default function Transaksi() {
         paymentCategory: queuePayMethod === 'Tunai' ? 'Tunai' : 'Digital',
         paid: paidNum,
         change: Math.max(0, paidNum - payingOrder.total),
-        kasir: getSession()?.nama || 'Admin',
+        kasir: currentKasirName,
       });
       if (finalTrx) {
         setLastTransaction(finalTrx);
@@ -895,7 +899,7 @@ export default function Transaksi() {
         orderId: payingOrder.id,
         orderNumber: payingOrder.orderNumber,
         tanggal: tanggalStr,
-        kasir: getSession()?.nama || 'Admin',
+        kasir: currentKasirName,
         customer: payingOrder.customerName || 'Umum',
         items: payingOrder.items || [],
         subtotal: payingOrder.subtotal,

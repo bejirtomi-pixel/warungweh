@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Navbar from './Navbar';
+import CashierShiftModal from '../common/CashierShiftModal';
 
 export default function AppLayout() {
   const [collapsed, setCollapsed] = useState(false);
@@ -9,6 +10,9 @@ export default function AppLayout() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary-light via-rose-50 to-pink-50">
+      {/* Modal Input Petugas Kasir Mandiri jika Kasir belum memasukkan nama */}
+      <CashierShiftModal />
+
       <Sidebar
         collapsed={collapsed}
         mobileOpen={mobileOpen}

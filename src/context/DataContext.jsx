@@ -1,6 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
-import { auth } from '../firebase';
+import { auth, db } from '../firebase';
+import { doc, getDoc } from 'firebase/firestore';
+import { logActivity } from '../utils/activityLogger';
 import {
   fetchUserData,
   pushItems,
@@ -389,6 +391,78 @@ export function DataProvider({ children }) {
     [tables, persistTables]
   );
 
+  // Buka Sesi Meja Baru secara eksplisit oleh Kasir
+  const openTableSession = useCallback(
+    (tableId, sessionParams = {}) => {
+      const {
+        customerName = '',
+        kasirUid = 'KASIR',
+        kasirName = 'Kasir',
+      } = sessionParams;
+
+      const targetTable = tables.find((t) => t.id === tableId);
+      if (!targetTable) return null;
+
+      // Cek apakah sudah ada sesi aktif untuk meja ini
+      const existingSession = tableSessions.find(
+        (s) => s.tableId === tableId && s.status !== 'closed'
+      );
+      if (existingSession) {
+        return existingSession;
+      }
+
+      const nowIso = new Date().toISOString();
+      const generatedSessionId = `SES-${Date.now().toString().slice(-6)}`;
+      const finalCustomerName = customerName.trim() || `Tamu ${targetTable.name}`;
+
+      const newSession = {
+        id: generatedSessionId,
+        tableId,
+        tableName: targetTable.name,
+        status: 'active',
+        startedAt: nowIso,
+        closedAt: null,
+        orderIds: [],
+        customerName: finalCustomerName,
+        subtotal: 0,
+        tax: 0,
+        discount: 0,
+        total: 0,
+        paymentStatus: 'unpaid',
+        paymentMethod: null,
+        openedByUid: kasirUid,
+        openedByName: kasirName,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+
+      persistTables(
+        tables.map((t) =>
+          t.id === tableId
+            ? { ...t, activeSessionId: generatedSessionId, updatedAt: nowIso }
+            : t
+        )
+      );
+
+      persistTableSessions([newSession, ...tableSessions]);
+
+      logActivity({
+        actorUid: kasirUid,
+        actorName: kasirName,
+        actorRole: 'KASIR',
+        action: 'SESSION_OPEN',
+        module: 'MEJA',
+        targetId: tableId,
+        sessionId: generatedSessionId,
+        details: { tableName: targetTable.name, customerName: finalCustomerName },
+        status: 'SUCCESS',
+      });
+
+      return newSession;
+    },
+    [tables, tableSessions, persistTables, persistTableSessions]
+  );
+
   // Unified Order Management: Create Order (Dine In, Delivery, Pickup)
   const createUnifiedOrder = useCallback(
     (orderInput) => {
@@ -436,20 +510,26 @@ export function DataProvider({ children }) {
       let targetTable = null;
 
       if (orderType === 'dine_in' && tableId) {
-        targetTable = tables.find((t) => t.id === tableId);
+        targetTable = tables.find((t) => t.id === tableId || t.qrToken === tableId);
         const existingSession = tableSessions.find(
-          (s) => s.tableId === tableId && s.status !== 'closed'
+          (s) => s.tableId === targetTable?.id && s.status !== 'closed'
         );
 
         if (existingSession) {
           targetSessionId = existingSession.id;
+        } else if (source === 'qr_menu') {
+          // Meja belum aktif: pelanggan belum boleh membuat pesanan sebelum diaktifkan kasir
+          return {
+            error: 'TABLE_NOT_ACTIVE',
+            message: 'Meja ini belum diaktifkan oleh kasir. Silakan hubungi kasir/staf untuk mengaktifkan meja.',
+          };
         } else {
-          // Buat sesi meja baru jika belum ada sesi aktif
+          // Pesanan langsung kasir di meja kosong: otomatis buat sesi
           const newSessionId = `SES-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
           targetSessionId = newSessionId;
           const newSession = {
             id: newSessionId,
-            tableId,
+            tableId: targetTable?.id || tableId,
             tableName: targetTable?.name || `Meja ${tableId}`,
             status: 'active',
             startedAt: nowIso,
@@ -470,7 +550,7 @@ export function DataProvider({ children }) {
 
           persistTables(
             tables.map((t) =>
-              t.id === tableId ? { ...t, activeSessionId: newSessionId, updatedAt: nowIso } : t
+              t.id === targetTable?.id ? { ...t, activeSessionId: newSessionId, updatedAt: nowIso } : t
             )
           );
 
@@ -494,7 +574,7 @@ export function DataProvider({ children }) {
         orderNumber: generatedOrderNumber,
         orderType, // 'dine_in' | 'delivery' | 'pickup'
         source, // 'qr_menu' | 'pos_cashier'
-        tableId: orderType === 'dine_in' ? tableId : null,
+        tableId: orderType === 'dine_in' ? targetTable?.id || tableId : null,
         tableName: orderType === 'dine_in' ? targetTable?.name || null : null,
         sessionId: targetSessionId,
         customerName: customerName.trim() || (orderType === 'dine_in' ? `Tamu ${targetTable?.name || ''}` : 'Umum'),
@@ -531,8 +611,8 @@ export function DataProvider({ children }) {
         updatedAt: nowIso,
       };
 
-      // Jika pesanan tambahan pada sesi yang ada, perbarui daftar order dan hitung tagihan konsolidasi
-      if (targetSessionId && tableSessions.some((s) => s.id === targetSessionId)) {
+      // Jika pesanan langsung kasir (confirmed), perbarui tagihan sesi
+      if (defaultOrderStatus !== 'pending' && targetSessionId && tableSessions.some((s) => s.id === targetSessionId)) {
         persistTableSessions(
           tableSessions.map((s) => {
             if (s.id !== targetSessionId) return s;
@@ -543,7 +623,9 @@ export function DataProvider({ children }) {
                 (o) =>
                   updatedOrderIds.includes(o.id) &&
                   o.id !== generatedOrderId &&
-                  o.orderStatus !== 'cancelled'
+                  o.orderStatus !== 'cancelled' &&
+                  o.orderStatus !== 'rejected' &&
+                  o.orderStatus !== 'pending'
               ),
             ];
             const sSub = allSessionOrders.reduce((sum, o) => sum + (Number(o.subtotal) || 0), 0);
@@ -562,6 +644,18 @@ export function DataProvider({ children }) {
             };
           })
         );
+      } else if (targetSessionId && tableSessions.some((s) => s.id === targetSessionId)) {
+        // Jika order pending dari QR Menu, kaitkan orderId ke sesi tanpa menambah total tagihan
+        persistTableSessions(
+          tableSessions.map((s) => {
+            if (s.id !== targetSessionId) return s;
+            return {
+              ...s,
+              orderIds: [...new Set([...(s.orderIds || []), generatedOrderId])],
+              updatedAt: nowIso,
+            };
+          })
+        );
       }
 
       // Pengurangan stok atomik
@@ -576,9 +670,181 @@ export function DataProvider({ children }) {
       persistProducts(nextProducts);
 
       persistOrders([newOrder, ...orders]);
+
+      // Catat ke log
+      logActivity({
+        actorUid: source === 'qr_menu' ? 'CUSTOMER_QR' : 'KASIR',
+        actorName: source === 'qr_menu' ? newOrder.customerName : 'Kasir',
+        actorRole: source === 'qr_menu' ? 'CUSTOMER' : 'KASIR',
+        action: 'ORDER_SUBMITTED',
+        module: 'DINE_IN',
+        targetId: newOrder.tableId,
+        sessionId: targetSessionId,
+        orderId: generatedOrderId,
+        details: { total: calcTotal, itemCount: items.length, source },
+        status: 'SUCCESS',
+      });
+
       return newOrder;
     },
     [orders, tableSessions, tables, products, persistOrders, persistTableSessions, persistTables, persistProducts]
+  );
+
+  // Kasir Menerima Pesanan Dine In (Status Pending -> Confirmed & Gabung Tagihan Sesi)
+  const acceptDineInOrder = useCallback(
+    (orderId, { kasirUid = 'KASIR', kasirName = 'Kasir' } = {}) => {
+      const existing = orders.find((o) => o.id === orderId);
+      if (!existing) return false;
+
+      const nowIso = new Date().toISOString();
+
+      const updatedOrders = orders.map((o) =>
+        o.id === orderId
+          ? {
+              ...o,
+              orderStatus: 'confirmed',
+              fulfillmentStatus: 'preparing',
+              confirmedBy: kasirUid,
+              confirmedByName: kasirName,
+              confirmedAt: nowIso,
+              updatedAt: nowIso,
+            }
+          : o
+      );
+      persistOrders(updatedOrders);
+
+      // Hitung ulang tagihan sesi dengan order yang sudah diterima ini
+      if (existing.sessionId) {
+        persistTableSessions(
+          tableSessions.map((s) => {
+            if (s.id !== existing.sessionId) return s;
+            const updatedOrderIds = [...new Set([...(s.orderIds || []), orderId])];
+            const allAcceptedOrders = updatedOrders.filter(
+              (o) =>
+                updatedOrderIds.includes(o.id) &&
+                o.orderStatus !== 'cancelled' &&
+                o.orderStatus !== 'rejected' &&
+                o.orderStatus !== 'pending'
+            );
+
+            const sSub = allAcceptedOrders.reduce((sum, o) => sum + (Number(o.subtotal) || 0), 0);
+            const sTax = allAcceptedOrders.reduce((sum, o) => sum + (Number(o.tax) || 0), 0);
+            const sDisc = allAcceptedOrders.reduce((sum, o) => sum + (Number(o.discount) || 0), 0);
+            const sTot = Math.max(0, sSub - sDisc + sTax);
+
+            return {
+              ...s,
+              orderIds: updatedOrderIds,
+              subtotal: sSub,
+              tax: sTax,
+              discount: sDisc,
+              total: sTot,
+              updatedAt: nowIso,
+            };
+          })
+        );
+      }
+
+      logActivity({
+        actorUid: kasirUid,
+        actorName: kasirName,
+        actorRole: 'KASIR',
+        action: 'ORDER_ACCEPTED',
+        module: 'DINE_IN',
+        targetId: existing.tableId,
+        sessionId: existing.sessionId,
+        orderId,
+        details: { orderNumber: existing.orderNumber, total: existing.total },
+        status: 'SUCCESS',
+      });
+
+      return true;
+    },
+    [orders, tableSessions, persistOrders, persistTableSessions]
+  );
+
+  // Kasir Menolak Pesanan Dine In (Stok Dikembalikan & Tidak Masuk Tagihan)
+  const rejectDineInOrder = useCallback(
+    (orderId, { reason = 'Ditolak kasir', kasirUid = 'KASIR', kasirName = 'Kasir' } = {}) => {
+      const existing = orders.find((o) => o.id === orderId);
+      if (!existing) return false;
+
+      const nowIso = new Date().toISOString();
+
+      // Kembalikan stok
+      const nextProducts = products.map((p) => {
+        const item = (existing.items || []).find((i) => i.id === p.id);
+        if (!item) return p;
+        return {
+          ...p,
+          stok: (Number(p.stok) || 0) + (Number(item.qty) || 0),
+        };
+      });
+      persistProducts(nextProducts);
+
+      // Batalkan order
+      persistOrders(
+        orders.map((o) =>
+          o.id === orderId
+            ? {
+                ...o,
+                orderStatus: 'cancelled',
+                cancellationReason: reason,
+                rejectedBy: kasirUid,
+                rejectedByName: kasirName,
+                rejectedAt: nowIso,
+                updatedAt: nowIso,
+              }
+            : o
+        )
+      );
+
+      // Pastikan sesi tidak menghitung pesanan yang ditolak
+      if (existing.sessionId) {
+        persistTableSessions(
+          tableSessions.map((s) => {
+            if (s.id !== existing.sessionId) return s;
+            const remainingOrders = orders.filter(
+              (o) =>
+                (s.orderIds || []).includes(o.id) &&
+                o.id !== orderId &&
+                o.orderStatus !== 'cancelled' &&
+                o.orderStatus !== 'rejected' &&
+                o.orderStatus !== 'pending'
+            );
+            const sSub = remainingOrders.reduce((sum, o) => sum + (Number(o.subtotal) || 0), 0);
+            const sTax = remainingOrders.reduce((sum, o) => sum + (Number(o.tax) || 0), 0);
+            const sDisc = remainingOrders.reduce((sum, o) => sum + (Number(o.discount) || 0), 0);
+            const sTot = Math.max(0, sSub - sDisc + sTax);
+
+            return {
+              ...s,
+              subtotal: sSub,
+              tax: sTax,
+              discount: sDisc,
+              total: sTot,
+              updatedAt: nowIso,
+            };
+          })
+        );
+      }
+
+      logActivity({
+        actorUid: kasirUid,
+        actorName: kasirName,
+        actorRole: 'KASIR',
+        action: 'ORDER_REJECTED',
+        module: 'DINE_IN',
+        targetId: existing.tableId,
+        sessionId: existing.sessionId,
+        orderId,
+        details: { reason, orderNumber: existing.orderNumber },
+        status: 'SUCCESS',
+      });
+
+      return true;
+    },
+    [orders, products, tableSessions, persistProducts, persistOrders, persistTableSessions]
   );
 
   // Update status pemrosesan & penolakan pesanan
@@ -746,6 +1012,24 @@ export function DataProvider({ children }) {
       };
 
       persistTransactions([finalTrx, ...transactions]);
+
+      logActivity({
+        actorUid: settlementData.kasirUid || 'KASIR',
+        actorName: kasir,
+        actorRole: 'KASIR',
+        action: 'SESSION_CLOSED',
+        module: 'MEJA',
+        sessionId: session.id,
+        targetId: session.tableId,
+        details: {
+          tableName: session.tableName,
+          total: session.total,
+          paymentMethod,
+          transactionId: finalTrx.id,
+        },
+        status: 'SUCCESS',
+      });
+
       return finalTrx;
     },
     [tableSessions, tables, orders, transactions, persistTableSessions, persistTables, persistOrders, persistTransactions]
@@ -1143,11 +1427,22 @@ export function DataProvider({ children }) {
         // pembatas ALLOWED_UID).
         const uid = user.uid;
 
-        authUidRef.current = uid;
-
         (async () => {
           try {
-            const remote = await fetchUserData(uid);
+            let targetStoreUid = uid;
+            try {
+              const uSnap = await getDoc(doc(db, 'app_users', uid));
+              if (uSnap.exists()) {
+                const uData = uSnap.data();
+                if (uData.storeId) {
+                  targetStoreUid = uData.storeId;
+                }
+              }
+            } catch {}
+
+            authUidRef.current = targetStoreUid;
+
+            const remote = await fetchUserData(targetStoreUid);
             if (cancelled) return;
 
             const remoteKosong =
@@ -1266,6 +1561,9 @@ export function DataProvider({ children }) {
 
       createUnifiedOrder,
       updateOrderProcessingStatus,
+      openTableSession,
+      acceptDineInOrder,
+      rejectDineInOrder,
       closeTableSession,
 
       createCustomer,
@@ -1318,6 +1616,9 @@ export function DataProvider({ children }) {
       deleteOrder,
       createUnifiedOrder,
       updateOrderProcessingStatus,
+      openTableSession,
+      acceptDineInOrder,
+      rejectDineInOrder,
       closeTableSession,
       createCustomer,
       updateCustomer,
