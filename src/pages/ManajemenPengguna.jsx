@@ -48,7 +48,7 @@ import {
 } from '../utils/userManagement.js';
 
 export default function ManajemenPengguna() {
-  const { user: currentStaff, role: staffRole, isSuperAdmin } = useAuth();
+  const { user: currentStaff, role: staffRole, isSuperAdmin, isKasir } = useAuth();
 
   // Tab State: 'all' | 'pending' | 'active' | 'suspended' | 'matrix'
   const [activeTab, setActiveTab] = useState('pending');
@@ -103,6 +103,7 @@ export default function ManajemenPengguna() {
   const [newName, setNewName] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newRole, setNewRole] = useState(ROLES.KASIR);
+  const [newStatus, setNewStatus] = useState('approved');
   const [newPermissions, setNewPermissions] = useState(DEFAULT_PERMISSIONS[ROLES.KASIR]);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
@@ -124,6 +125,21 @@ export default function ManajemenPengguna() {
   useEffect(() => {
     loadAllData();
   }, []);
+
+  // Kasir DILARANG mengakses halaman Manajemen Pengguna
+  if (staffRole === ROLES.KASIR || isKasir) {
+    return (
+      <div className="p-8 max-w-lg mx-auto my-12 bg-white rounded-3xl border border-red-200 text-center space-y-4 shadow-sm">
+        <div className="h-16 w-16 mx-auto rounded-2xl bg-red-50 text-red-600 flex items-center justify-center">
+          <ShieldAlert size={36} />
+        </div>
+        <h2 className="text-xl font-bold text-slate-800">Akses Terbatas untuk Kasir</h2>
+        <p className="text-xs sm:text-sm text-slate-500">
+          Kasir tidak memiliki izin untuk mengakses halaman Manajemen Pengguna dan daftar akun staf.
+        </p>
+      </div>
+    );
+  }
 
   // Filtered Users Collections
   const activeUsers = useMemo(() => {
@@ -203,8 +219,9 @@ export default function ManajemenPengguna() {
       await approveRegistrationRequest(selectedRequest.id, selectedRequest.uid, {
         role: assignRole,
         permissions: assignRole === ROLES.SUPER_ADMIN ? ['*'] : assignPermissions,
-        approverUid: currentStaff?.uid || 'SUPER_ADMIN',
-        approverName: currentStaff?.displayName || 'Super Admin',
+        approverRole: staffRole,
+        approverUid: currentStaff?.uid || 'STAFF',
+        approverName: currentStaff?.displayName || 'Administrator',
       });
       showFeedback(`Akun ${selectedRequest.email} berhasil disetujui sebagai ${assignRole}!`);
       setApproveModalOpen(false);
@@ -223,8 +240,9 @@ export default function ManajemenPengguna() {
     try {
       await rejectRegistrationRequest(selectedRequest.id, selectedRequest.uid, {
         reason: rejectReason,
-        approverUid: currentStaff?.uid || 'SUPER_ADMIN',
-        approverName: currentStaff?.displayName || 'Super Admin',
+        approverRole: staffRole,
+        approverUid: currentStaff?.uid || 'STAFF',
+        approverName: currentStaff?.displayName || 'Administrator',
       });
       showFeedback(`Pendaftaran ${selectedRequest.email} berhasil ditolak`);
       setRejectModalOpen(false);
@@ -238,8 +256,12 @@ export default function ManajemenPengguna() {
   };
 
   const handleOpenEdit = (user) => {
+    if (user.role === ROLES.SUPER_ADMIN && !isSuperAdmin) {
+      showFeedback('Admin tidak memiliki izin untuk mengubah akun Super Admin', 'error');
+      return;
+    }
     setEditingUser(user);
-    setEditRole(user.role || ROLES.KASIR);
+    setEditRole(user.role === 'belum_ditentukan' ? ROLES.KASIR : (user.role || ROLES.KASIR));
     setEditPermissions(user.permissions || DEFAULT_PERMISSIONS[user.role || ROLES.KASIR] || []);
     setEditModalOpen(true);
   };
@@ -251,8 +273,9 @@ export default function ManajemenPengguna() {
       await updateUserRoleAndPermissions(editingUser.uid, {
         role: editRole,
         permissions: editRole === ROLES.SUPER_ADMIN ? ['*'] : editPermissions,
-        updaterUid: currentStaff?.uid || 'SUPER_ADMIN',
-        updaterName: currentStaff?.displayName || 'Super Admin',
+        updaterRole: staffRole,
+        updaterUid: currentStaff?.uid || 'STAFF',
+        updaterName: currentStaff?.displayName || 'Administrator',
       });
       showFeedback(`Hak akses untuk ${editingUser.displayName || editingUser.email} berhasil diperbarui!`);
       setEditModalOpen(false);
@@ -265,6 +288,10 @@ export default function ManajemenPengguna() {
   };
 
   const handleOpenSuspend = (user) => {
+    if (user.role === ROLES.SUPER_ADMIN && !isSuperAdmin) {
+      showFeedback('Admin tidak memiliki izin untuk menangguhkan akun Super Admin', 'error');
+      return;
+    }
     setSuspendingUser(user);
     setSuspendReason('Penonaktifan sementara oleh Administrator');
     setSuspendModalOpen(true);
@@ -276,8 +303,9 @@ export default function ManajemenPengguna() {
     try {
       await suspendUser(suspendingUser.uid, {
         reason: suspendReason,
-        updaterUid: currentStaff?.uid || 'SUPER_ADMIN',
-        updaterName: currentStaff?.displayName || 'Super Admin',
+        updaterRole: staffRole,
+        updaterUid: currentStaff?.uid || 'STAFF',
+        updaterName: currentStaff?.displayName || 'Administrator',
       });
       showFeedback(`Akun ${suspendingUser.displayName || suspendingUser.email} telah dinonaktifkan.`);
       setSuspendModalOpen(false);
@@ -291,8 +319,12 @@ export default function ManajemenPengguna() {
   };
 
   const handleOpenReactivate = (user) => {
+    if (user.role === ROLES.SUPER_ADMIN && !isSuperAdmin) {
+      showFeedback('Admin tidak memiliki izin untuk mengaktifkan akun Super Admin', 'error');
+      return;
+    }
     setReactivatingUser(user);
-    const r = user.role || ROLES.KASIR;
+    const r = user.role === 'belum_ditentukan' ? ROLES.KASIR : (user.role || ROLES.KASIR);
     setReactivateRole(r);
     setReactivatePermissions(user.permissions?.length ? user.permissions : DEFAULT_PERMISSIONS[r]);
     setReactivateModalOpen(true);
@@ -305,8 +337,9 @@ export default function ManajemenPengguna() {
       await reactivateUser(reactivatingUser.uid, {
         role: reactivateRole,
         permissions: reactivateRole === ROLES.SUPER_ADMIN ? ['*'] : reactivatePermissions,
-        updaterUid: currentStaff?.uid || 'SUPER_ADMIN',
-        updaterName: currentStaff?.displayName || 'Super Admin',
+        updaterRole: staffRole,
+        updaterUid: currentStaff?.uid || 'STAFF',
+        updaterName: currentStaff?.displayName || 'Administrator',
       });
       showFeedback(`Akun ${reactivatingUser.displayName || reactivatingUser.email} berhasil diaktifkan kembali!`);
       setReactivateModalOpen(false);
@@ -337,19 +370,26 @@ export default function ManajemenPengguna() {
         password: newPassword,
         displayName: newName.trim(),
         role: newRole,
+        status: newStatus,
         permissions: newRole === ROLES.SUPER_ADMIN ? ['*'] : newPermissions,
-        creatorUid: currentStaff?.uid || 'SUPER_ADMIN',
-        creatorName: currentStaff?.displayName || 'Super Admin',
+        creatorRole: staffRole,
+        creatorUid: currentStaff?.uid || 'STAFF',
+        creatorName: currentStaff?.displayName || 'Administrator',
       });
 
-      showFeedback(`Pengguna baru (${newEmail}) berhasil dibuat!`);
+      showFeedback(`Pengguna baru (${newEmail}) berhasil dibuat dengan status ${newStatus === 'approved' ? 'Disetujui' : 'Menunggu Persetujuan'}!`);
       setNewEmail('');
       setNewName('');
       setNewPassword('');
       setNewRole(ROLES.KASIR);
+      setNewStatus('approved');
       setNewPermissions(DEFAULT_PERMISSIONS[ROLES.KASIR]);
       setAddUserModalOpen(false);
-      setActiveTab('active');
+      if (newStatus === 'approved') {
+        setActiveTab('active');
+      } else {
+        setActiveTab('pending');
+      }
       loadAllData();
     } catch (err) {
       showFeedback(err.message || 'Gagal membuat pengguna baru', 'error');
@@ -629,6 +669,7 @@ export default function ManajemenPengguna() {
                 <option value={ROLES.SUPER_ADMIN}>Super Admin</option>
                 <option value={ROLES.ADMIN}>Admin</option>
                 <option value={ROLES.KASIR}>Kasir</option>
+                <option value="belum_ditentukan">Belum Ditentukan</option>
               </select>
             </div>
           </div>
@@ -656,22 +697,26 @@ export default function ManajemenPengguna() {
                   ) : (
                     applyFilter(users).map((u) => {
                       const isSuper = u.role === ROLES.SUPER_ADMIN;
+                      const isAdminRole = u.role === ROLES.ADMIN;
+                      const isKasirRole = u.role === ROLES.KASIR;
                       const isCurrentUser = u.uid === currentStaff?.uid;
                       const permCount = (u.permissions || []).includes('*')
                         ? 'Semua Fitur (*)'
                         : `${(u.permissions || []).length} Izin`;
 
                       return (
-                        <tr key={u.uid} className="hover:bg-slate-50/70 transition">
+                        <tr key={u.uid || u.id} className="hover:bg-slate-50/70 transition">
                           <td className="px-5 py-3.5">
                             <div className="flex items-center gap-3">
                               <div
                                 className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs ${
                                   isSuper
                                     ? 'bg-purple-600 text-white'
-                                    : u.role === ROLES.ADMIN
+                                    : isAdminRole
                                     ? 'bg-blue-600 text-white'
-                                    : 'bg-emerald-600 text-white'
+                                    : isKasirRole
+                                    ? 'bg-emerald-600 text-white'
+                                    : 'bg-amber-500 text-white'
                                 }`}
                               >
                                 {(u.displayName || u.email || 'U').charAt(0).toUpperCase()}
@@ -694,13 +739,15 @@ export default function ManajemenPengguna() {
                               className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold ${
                                 isSuper
                                   ? 'bg-purple-100 text-purple-700'
-                                  : u.role === ROLES.ADMIN
+                                  : isAdminRole
                                   ? 'bg-blue-100 text-blue-700'
-                                  : 'bg-emerald-100 text-emerald-700'
+                                  : isKasirRole
+                                  ? 'bg-emerald-100 text-emerald-700'
+                                  : 'bg-amber-100 text-amber-700 border border-amber-200'
                               }`}
                             >
                               <Shield size={12} />
-                              {u.role || ROLES.KASIR}
+                              {isSuper ? 'SUPER ADMIN' : isAdminRole ? 'ADMIN' : isKasirRole ? 'KASIR' : 'Belum Ditentukan'}
                             </span>
                           </td>
                           <td className="px-5 py-3.5">
@@ -712,7 +759,9 @@ export default function ManajemenPengguna() {
                                   ? 'bg-amber-50 text-amber-700 border border-amber-200'
                                   : isAccountRejected(u.status)
                                   ? 'bg-red-50 text-red-700 border border-red-200'
-                                  : 'bg-rose-50 text-rose-700 border border-rose-200'
+                                  : isAccountSuspended(u.status)
+                                  ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                  : 'bg-slate-100 text-slate-700 border border-slate-200'
                               }`}
                             >
                               {isAccountApproved(u.status)
@@ -721,7 +770,9 @@ export default function ManajemenPengguna() {
                                 ? 'Menunggu'
                                 : isAccountRejected(u.status)
                                 ? 'Ditolak'
-                                : 'Ditangguhkan'}
+                                : isAccountSuspended(u.status)
+                                ? 'Ditangguhkan'
+                                : 'Belum Ditentukan'}
                             </span>
                           </td>
                           <td className="px-5 py-3.5">
@@ -730,22 +781,28 @@ export default function ManajemenPengguna() {
                             </span>
                           </td>
                           <td className="px-5 py-3.5 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              <button
-                                onClick={() => handleOpenDetail(u)}
-                                className="px-2.5 py-1.5 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 text-xs font-semibold"
-                                title="Detail Pengguna"
-                              >
-                                Detail
-                              </button>
-                              <button
-                                onClick={() => handleOpenEdit(u)}
-                                className="px-3 py-1.5 rounded-xl bg-slate-100 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 font-semibold text-xs transition inline-flex items-center gap-1"
-                              >
-                                <Edit3 size={13} />
-                                Edit Izin
-                              </button>
-                            </div>
+                            {isSuper && !isSuperAdmin ? (
+                              <span className="text-[11px] text-slate-400 italic px-2 py-1 bg-slate-50 rounded-lg border border-slate-200">
+                                Khusus Super Admin
+                              </span>
+                            ) : (
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  onClick={() => handleOpenDetail(u)}
+                                  className="px-2.5 py-1.5 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 text-xs font-semibold"
+                                  title="Detail Pengguna"
+                                >
+                                  Detail
+                                </button>
+                                <button
+                                  onClick={() => handleOpenEdit(u)}
+                                  className="px-3 py-1.5 rounded-xl bg-slate-100 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 font-semibold text-xs transition inline-flex items-center gap-1"
+                                >
+                                  <Edit3 size={13} />
+                                  Edit Izin
+                                </button>
+                              </div>
+                            )}
                           </td>
                         </tr>
                       );
@@ -785,18 +842,20 @@ export default function ManajemenPengguna() {
                   ) : (
                     applyFilter(activeUsers).map((u) => {
                       const isSuper = u.role === ROLES.SUPER_ADMIN;
+                      const isAdminRole = u.role === ROLES.ADMIN;
+                      const isKasirRole = u.role === ROLES.KASIR;
                       const isCurrentUser = u.uid === currentStaff?.uid;
                       const permCount = (u.permissions || []).includes('*')
                         ? 'Full System Access (*)'
                         : `${(u.permissions || []).length} Fitur Terpilih`;
 
                       return (
-                        <tr key={u.uid} className="hover:bg-slate-50/70 transition">
+                        <tr key={u.uid || u.id} className="hover:bg-slate-50/70 transition">
                           <td className="px-5 py-3.5">
                             <div className="flex items-center gap-3">
                               <div
                                 className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs ${
-                                  isSuper ? 'bg-purple-600 text-white' : u.role === ROLES.ADMIN ? 'bg-blue-600 text-white' : 'bg-emerald-600 text-white'
+                                  isSuper ? 'bg-purple-600 text-white' : isAdminRole ? 'bg-blue-600 text-white' : isKasirRole ? 'bg-emerald-600 text-white' : 'bg-amber-500 text-white'
                                 }`}
                               >
                                 {(u.displayName || u.email || 'U').charAt(0).toUpperCase()}
@@ -819,13 +878,15 @@ export default function ManajemenPengguna() {
                               className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold ${
                                 isSuper
                                   ? 'bg-purple-100 text-purple-700'
-                                  : u.role === ROLES.ADMIN
+                                  : isAdminRole
                                   ? 'bg-blue-100 text-blue-700'
-                                  : 'bg-emerald-100 text-emerald-700'
+                                  : isKasirRole
+                                  ? 'bg-emerald-100 text-emerald-700'
+                                  : 'bg-amber-100 text-amber-700 border border-amber-200'
                               }`}
                             >
                               <Shield size={12} />
-                              {u.role || ROLES.KASIR}
+                              {isSuper ? 'SUPER ADMIN' : isAdminRole ? 'ADMIN' : isKasirRole ? 'KASIR' : 'Belum Ditentukan'}
                             </span>
                           </td>
                           <td className="px-5 py-3.5 text-xs text-slate-500">
@@ -837,26 +898,32 @@ export default function ManajemenPengguna() {
                             </span>
                           </td>
                           <td className="px-5 py-3.5 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              <button
-                                onClick={() => handleOpenEdit(u)}
-                                className="px-3 py-1.5 rounded-xl bg-slate-100 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 font-semibold text-xs transition inline-flex items-center gap-1"
-                              >
-                                <Edit3 size={13} />
-                                Edit Izin
-                              </button>
-
-                              {!isCurrentUser && (
+                            {isSuper && !isSuperAdmin ? (
+                              <span className="text-[11px] text-slate-400 italic px-2 py-1 bg-slate-50 rounded-lg border border-slate-200">
+                                Khusus Super Admin
+                              </span>
+                            ) : (
+                              <div className="flex items-center justify-end gap-1.5">
                                 <button
-                                  onClick={() => handleOpenSuspend(u)}
-                                  className="px-2.5 py-1.5 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 font-semibold text-xs transition inline-flex items-center gap-1"
-                                  title="Tangguhkan Akun"
+                                  onClick={() => handleOpenEdit(u)}
+                                  className="px-3 py-1.5 rounded-xl bg-slate-100 text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 font-semibold text-xs transition inline-flex items-center gap-1"
                                 >
-                                  <Ban size={13} />
-                                  Tangguhkan
+                                  <Edit3 size={13} />
+                                  Edit Izin
                                 </button>
-                              )}
-                            </div>
+
+                                {!isCurrentUser && (
+                                  <button
+                                    onClick={() => handleOpenSuspend(u)}
+                                    className="px-2.5 py-1.5 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 font-semibold text-xs transition inline-flex items-center gap-1"
+                                    title="Tangguhkan Akun"
+                                  >
+                                    <Ban size={13} />
+                                    Tangguhkan
+                                  </button>
+                                )}
+                              </div>
+                            )}
                           </td>
                         </tr>
                       );
@@ -1111,7 +1178,7 @@ export default function ManajemenPengguna() {
                   {[
                     { r: ROLES.KASIR, label: 'Kasir', desc: 'Akses transaksi POS, meja, dan cetak struk' },
                     { r: ROLES.ADMIN, label: 'Admin', desc: 'Akses barang, laporan, meja, transaksi' },
-                    { r: ROLES.SUPER_ADMIN, label: 'Super Admin', desc: 'Akses penuh ke seluruh sistem toko' },
+                    ...(isSuperAdmin ? [{ r: ROLES.SUPER_ADMIN, label: 'Super Admin', desc: 'Akses penuh ke seluruh sistem toko' }] : []),
                   ].map(({ r, label, desc }) => (
                     <button
                       key={r}
@@ -1273,8 +1340,8 @@ export default function ManajemenPengguna() {
             <div className="flex-1 overflow-y-auto space-y-4 pr-1">
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase mb-2">Pilih Peran Utama</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {[ROLES.KASIR, ROLES.ADMIN, ROLES.SUPER_ADMIN].map((r) => (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {[ROLES.KASIR, ROLES.ADMIN, ...(isSuperAdmin ? [ROLES.SUPER_ADMIN] : [])].map((r) => (
                     <button
                       key={r}
                       type="button"
@@ -1413,8 +1480,8 @@ export default function ManajemenPengguna() {
 
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase mb-2">Tetapkan Peran</label>
-              <div className="grid grid-cols-3 gap-2">
-                {[ROLES.KASIR, ROLES.ADMIN, ROLES.SUPER_ADMIN].map((r) => (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {[ROLES.KASIR, ROLES.ADMIN, ...(isSuperAdmin ? [ROLES.SUPER_ADMIN] : [])].map((r) => (
                   <button
                     key={r}
                     type="button"
@@ -1520,8 +1587,8 @@ export default function ManajemenPengguna() {
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase mb-2">Pilih Peran</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {[ROLES.KASIR, ROLES.ADMIN, ROLES.SUPER_ADMIN].map((r) => (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {[ROLES.KASIR, ROLES.ADMIN, ...(isSuperAdmin ? [ROLES.SUPER_ADMIN] : [])].map((r) => (
                     <button
                       key={r}
                       type="button"
@@ -1535,6 +1602,36 @@ export default function ManajemenPengguna() {
                       {r}
                     </button>
                   ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-2">Status Akun Awal</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setNewStatus('approved')}
+                    className={`py-2.5 px-3 rounded-xl border text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                      newStatus === 'approved'
+                        ? 'border-emerald-600 bg-emerald-50 text-emerald-700'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <CheckCircle2 size={14} />
+                    Langsung Aktif
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewStatus('pending')}
+                    className={`py-2.5 px-3 rounded-xl border text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                      newStatus === 'pending'
+                        ? 'border-amber-500 bg-amber-50 text-amber-700'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <Clock size={14} />
+                    Menunggu Persetujuan
+                  </button>
                 </div>
               </div>
 

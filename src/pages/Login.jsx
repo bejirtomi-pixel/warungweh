@@ -35,6 +35,8 @@ import {
   fetchUserProfile,
   bootstrapSuperAdmin,
   isAccountApproved,
+  isRoleAssigned,
+  DEFAULT_CASHIER_EMAILS,
 } from '../utils/userManagement.js';
 import { logActivity } from '../utils/activityLogger.js';
 
@@ -101,10 +103,12 @@ export default function Login() {
         if (cancelled) return;
         if (user) {
           const email = (user.email || '').toLowerCase().trim();
-          const isPrimary = email === 'qurmacel@gmail.com' || email === 'admin@gmail.com';
+          const isRootSuper = email === 'qurmacel@gmail.com';
           const profile = (await bootstrapSuperAdmin(user)) || (await fetchUserProfile(user.uid));
+          const hasAssignedRole = isRoleAssigned(profile?.role) || isRootSuper;
+          const isApproved = isAccountApproved(profile?.status) || isRootSuper;
 
-          if (isPrimary || isAccountApproved(profile?.status)) {
+          if (hasAssignedRole && isApproved) {
             navigate('/dashboard', { replace: true });
           } else {
             navigate('/pending-approval', { replace: true });
@@ -143,25 +147,60 @@ export default function Login() {
         remember ? browserLocalPersistence : browserSessionPersistence
       );
 
-      const userCredential = await signInWithEmailAndPassword(
-        auth,
-        trimmedEmail,
-        password
-      );
+      let userCredential;
+      const lower = trimmedEmail.toLowerCase();
+      const isRootSuper = lower === 'qurmacel@gmail.com';
+
+      try {
+        userCredential = await signInWithEmailAndPassword(
+          auth,
+          trimmedEmail,
+          password
+        );
+      } catch (signInErr) {
+        // Jika akun Super Admin utama belum terdaftar di Firebase Auth proyek ini,
+        // daftarkan secara otomatis dengan kredensial yang dimasukkan
+        if (
+          isRootSuper &&
+          (signInErr.code === 'auth/user-not-found' ||
+            signInErr.code === 'auth/invalid-credential')
+        ) {
+          try {
+            userCredential = await createUserWithEmailAndPassword(
+              auth,
+              trimmedEmail,
+              password
+            );
+          } catch (createErr) {
+            if (createErr.code === 'auth/email-already-in-use') {
+              throw signInErr; // Password salah pada akun yang sudah ada
+            }
+            throw createErr;
+          }
+        } else {
+          throw signInErr;
+        }
+      }
+
       const user = userCredential.user;
-      const userEmail = (user.email || trimmedEmail).toLowerCase().trim();
-      const isPrimary = userEmail === 'qurmacel@gmail.com' || userEmail === 'admin@gmail.com';
-
       const profile = (await bootstrapSuperAdmin(user)) || (await fetchUserProfile(user.uid));
+      const hasAssignedRole = isRoleAssigned(profile?.role) || isRootSuper;
+      const isApproved = isAccountApproved(profile?.status) || isRootSuper;
 
-      if (isPrimary || isAccountApproved(profile?.status)) {
+      if (hasAssignedRole && isApproved) {
         navigate('/dashboard', { replace: true });
         return;
       }
 
       navigate('/pending-approval', { replace: true });
     } catch (err) {
-      setError(firebaseErrorMessage(err.code || ''));
+      if (lower === 'admin@gmail.com' && (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential')) {
+        setError(
+          'Akun Admin (admin@gmail.com) belum terdaftar di Firebase Authentication atau kata sandi salah. Silakan pastikan akun admin@gmail.com telah dibuat di Firebase Console (Authentication > Users) atau hubungi Super Admin.'
+        );
+      } else {
+        setError(firebaseErrorMessage(err.code || ''));
+      }
     } finally {
       setEmailLoading(false);
     }
@@ -187,7 +226,11 @@ export default function Login() {
 
     // Lindungi akun resmi utama dari registrasi publik
     const lowerEmail = trimmedEmail.toLowerCase();
-    if (lowerEmail === 'qurmacel@gmail.com' || lowerEmail === 'admin@gmail.com') {
+    if (
+      lowerEmail === 'qurmacel@gmail.com' ||
+      lowerEmail === 'admin@gmail.com' ||
+      DEFAULT_CASHIER_EMAILS.includes(lowerEmail)
+    ) {
       setError('Email ini adalah akun resmi sistem yang dilindungi. Silakan login langsung menggunakan tab Masuk.');
       return;
     }
@@ -271,7 +314,10 @@ export default function Login() {
       const result = await signInWithPopup(auth, googleProvider);
       const user = result.user;
       const userEmail = (user.email || '').toLowerCase().trim();
-      const isPrimary = userEmail === 'qurmacel@gmail.com' || userEmail === 'admin@gmail.com';
+      const isPrimary =
+        userEmail === 'qurmacel@gmail.com' ||
+        userEmail === 'admin@gmail.com' ||
+        DEFAULT_CASHIER_EMAILS.includes(userEmail);
 
       const profile = (await bootstrapSuperAdmin(user)) || (await fetchUserProfile(user.uid));
 

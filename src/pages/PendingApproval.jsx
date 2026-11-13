@@ -12,7 +12,7 @@ import {
   User,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { isAccountApproved } from '../utils/userManagement.js';
+import { isAccountApproved, isRoleAssigned } from '../utils/userManagement.js';
 import Logo from '../components/common/Logo';
 
 export default function PendingApproval() {
@@ -21,13 +21,14 @@ export default function PendingApproval() {
   const [checking, setChecking] = useState(false);
   const [message, setMessage] = useState('');
 
-  // Auto-redirect jika akun utama atau sudah approved
+  // Auto-redirect jika akun utama atau sudah approved dengan role yang jelas
   useEffect(() => {
     const email = (user?.email || userProfile?.email || '').toLowerCase().trim();
-    const isPrimary = email === 'qurmacel@gmail.com' || email === 'admin@gmail.com';
-    const isApproved = isAccountApproved(userProfile?.status);
+    const isRootSuper = email === 'qurmacel@gmail.com';
+    const hasAssignedRole = isRoleAssigned(userProfile?.role) || isRootSuper;
+    const isApproved = isAccountApproved(userProfile?.status) || isRootSuper;
 
-    if (user && (isPrimary || isApproved)) {
+    if (user && hasAssignedRole && isApproved) {
       navigate('/dashboard', { replace: true });
     }
   }, [user, userProfile, navigate]);
@@ -43,15 +44,19 @@ export default function PendingApproval() {
     try {
       const p = await reloadProfile();
       const email = (user?.email || p?.email || '').toLowerCase().trim();
-      const isPrimary = email === 'qurmacel@gmail.com' || email === 'admin@gmail.com';
+      const isRootSuper = email === 'qurmacel@gmail.com';
+      const hasAssignedRole = isRoleAssigned(p?.role) || isRootSuper;
+      const isApproved = isAccountApproved(p?.status) || isRootSuper;
 
-      if (isPrimary || isAccountApproved(p?.status)) {
-        setMessage('Selamat! Akun Anda sudah disetujui. Mengalihkan ke Dashboard...');
+      if (hasAssignedRole && isApproved) {
+        setMessage('Selamat! Akun Anda sudah disetujui dan aktif. Mengalihkan ke Dashboard...');
         setTimeout(() => navigate('/dashboard', { replace: true }), 800);
       } else if (p?.status === 'rejected') {
-        setMessage('Permohonan pendaftaran akun Anda ditolak oleh Super Admin.');
+        setMessage('Permohonan pendaftaran akun Anda ditolak oleh Administrator.');
+      } else if (!hasAssignedRole) {
+        setMessage('Peran operasional akun Anda belum ditentukan oleh Administrator.');
       } else {
-        setMessage('Status akun Anda masih dalam antrean verifikasi Super Admin.');
+        setMessage('Status akun Anda masih dalam antrean verifikasi Administrator.');
       }
     } catch {
       setMessage('Gagal memperbarui status. Periksa koneksi internet Anda.');

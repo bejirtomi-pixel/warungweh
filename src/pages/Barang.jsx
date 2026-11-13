@@ -30,6 +30,9 @@ import {
   Coins,
   Layers,
   Check,
+  ShoppingBag,
+  Table2,
+  Truck,
 } from 'lucide-react';
 import LogoWatermark from '../components/common/LogoWatermark';
 import BarcodeLabel from '../components/common/BarcodeLabel';
@@ -54,6 +57,7 @@ const emptyForm = {
   pajakAktif: false,
   pajakJenis: 'PPN',
   pajakPersen: 10,
+  availableServices: ['pickup'],
 };
 
 function ProductThumb({ src, size = 'md' }) {
@@ -181,13 +185,25 @@ export default function Barang() {
 
   const handleOpenAdd = () => {
     setEditingId(null);
-    setForm(emptyForm);
+    setForm({ ...emptyForm, availableServices: ['pickup'] });
     setPreviewError(false);
     setModalOpen(true);
   };
 
   const handleOpenEdit = (product) => {
     setEditingId(product.id);
+    const existingServices = Array.isArray(product.availableServices) && product.availableServices.length > 0
+      ? [...product.availableServices]
+      : (product.availableInPickup || product.availableInDineIn || product.availableInDelivery)
+        ? [
+            ...(product.availableInPickup ? ['pickup'] : []),
+            ...(product.availableInDineIn ? ['dinein'] : []),
+            ...(product.availableInDelivery ? ['delivery'] : []),
+          ]
+        : product.isDineInOnly
+        ? ['dinein']
+        : ['pickup'];
+
     setForm({
       nama: product.nama || '',
       kode: product.kode || '',
@@ -208,9 +224,19 @@ export default function Barang() {
         product.pajakPersen !== undefined && product.pajakPersen !== null
           ? product.pajakPersen
           : 10,
+      availableServices: existingServices,
     });
     setPreviewError(false);
     setModalOpen(true);
+  };
+
+  const handleToggleService = (srv) => {
+    setForm((prev) => {
+      const cur = Array.isArray(prev.availableServices) ? prev.availableServices : ['pickup'];
+      const exists = cur.includes(srv);
+      const next = exists ? cur.filter((s) => s !== srv) : [...cur, srv];
+      return { ...prev, availableServices: next };
+    });
   };
 
   const handleFileUpload = async (e) => {
@@ -282,6 +308,7 @@ export default function Barang() {
       pajakAktif: Boolean(form.pajakAktif),
       pajakJenis: form.pajakJenis || 'PPN',
       pajakPersen: Math.min(100, Math.max(0, Number(form.pajakPersen) || 0)),
+      availableServices: Array.isArray(form.availableServices) ? form.availableServices : ['pickup'],
     };
 
     if (editingId) {
@@ -543,7 +570,139 @@ export default function Barang() {
         <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs">
           <LogoWatermark size="lg" />
 
-          <div className="relative z-10 overflow-x-auto">
+          {/* Card List untuk Smartphone (HP < 640px) */}
+          <div className="block sm:hidden divide-y divide-slate-100 relative z-10">
+            {paged.map((product) => {
+              const threshold =
+                Number(product.minStok) > 0
+                  ? Number(product.minStok)
+                  : Number(minStockThreshold) > 0
+                  ? Number(minStockThreshold)
+                  : 5;
+              const currentStok = Number(product.stok || 0);
+              const isOutOfStock = currentStok <= 0;
+              const isLowStock = currentStok > 0 && currentStok <= threshold;
+
+              return (
+                <div key={product.id} className="p-3.5 space-y-2.5">
+                  <div className="flex items-start gap-3">
+                    <ProductThumb src={product.foto} size="sm" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="font-bold text-xs text-slate-800 truncate">
+                          {product.nama}
+                        </span>
+                        <span
+                          className={`shrink-0 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                            product.status === 'Aktif'
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              : 'bg-slate-100 text-slate-600 border border-slate-200'
+                          }`}
+                        >
+                          {product.status || 'Aktif'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500">
+                        <span className="font-mono text-[10px]">{product.kode || '-'}</span>
+                        <span>•</span>
+                        <span className="rounded bg-slate-100 px-1.5 py-0.2 text-[10px]">{product.kategori}</span>
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {product.availableServices?.includes('pickup') && (
+                          <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.2 text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            Pickup
+                          </span>
+                        )}
+                        {product.availableServices?.includes('dinein') && (
+                          <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.2 text-[9px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                            Dine In
+                          </span>
+                        )}
+                        {product.availableServices?.includes('delivery') && (
+                          <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.2 text-[9px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                            Delivery
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1 border-t border-slate-50 text-xs">
+                    <div>
+                      <span className="text-[10px] text-slate-400 block">Harga Jual</span>
+                      <span className="font-black text-emerald-700 text-sm">
+                        {formatRupiah(product.harga)}
+                      </span>
+                    </div>
+
+                    <div className="text-right">
+                      <span className="text-[10px] text-slate-400 block">Stok</span>
+                      {isOutOfStock ? (
+                        <span className="inline-block rounded-md bg-rose-50 border border-rose-200 px-2 py-0.5 text-[10px] font-bold text-rose-700">
+                          Habis
+                        </span>
+                      ) : isLowStock ? (
+                        <span className="inline-block rounded-md bg-amber-50 border border-amber-200 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                          Menipis ({currentStok} {product.satuan || 'pcs'})
+                        </span>
+                      ) : (
+                        <span className="font-bold text-slate-700 text-xs">
+                          {currentStok} {product.satuan || 'pcs'}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex items-center justify-end gap-1 pt-1.5 border-t border-dashed border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => setDetailProduct(product)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                    >
+                      <Eye size={12} />
+                      <span>Detail</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handlePrintBarcode(product)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-violet-700 hover:bg-violet-50 cursor-pointer"
+                    >
+                      <Barcode size={12} />
+                      <span>Barcode</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEdit(product)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-sky-700 hover:bg-sky-50 cursor-pointer"
+                    >
+                      <Pencil size={12} />
+                      <span>Edit</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleRequestToggleStatus(product)}
+                      className="p-1 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-100 cursor-pointer"
+                      title={product.status === 'Aktif' ? 'Nonaktifkan' : 'Aktifkan'}
+                    >
+                      <Power size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleRequestDelete(product)}
+                      className="p-1 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 cursor-pointer"
+                      title="Hapus"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Tabel Data Barang untuk Tablet & Desktop (>= 640px) */}
+          <div className="hidden sm:block relative z-10 overflow-x-auto">
             <table className="w-full min-w-[950px] text-left text-xs sm:text-sm">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-bold uppercase tracking-wider text-slate-600">
@@ -593,6 +752,23 @@ export default function Barang() {
                                 {metaMap[product.id].deskripsi}
                               </span>
                             )}
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {product.availableServices?.includes('pickup') && (
+                                <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.2 text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  Pickup
+                                </span>
+                              )}
+                              {product.availableServices?.includes('dinein') && (
+                                <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.2 text-[9px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                  Dine In
+                                </span>
+                              )}
+                              {product.availableServices?.includes('delivery') && (
+                                <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.2 text-[9px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                  Delivery
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </td>
@@ -1219,6 +1395,105 @@ export default function Barang() {
                     <Ban size={16} className={form.status === 'Nonaktif' ? 'text-amber-600' : 'text-slate-400'} />
                     <span>Nonaktif (Sembunyikan)</span>
                   </label>
+                </div>
+              </div>
+
+              {/* GRUP 5: KETERSEDIAAN JENIS LAYANAN (PICKUP, DINE IN, DELIVERY) */}
+              <div className="rounded-2xl border border-slate-200/90 bg-white p-4 space-y-3.5 shadow-2xs">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                  <div className="flex items-center gap-2">
+                    <Layers size={16} className="text-emerald-600" />
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                      5. Ketersediaan Jenis Layanan (Katalog Kasir &amp; QR)
+                    </h4>
+                  </div>
+                  <span className="text-[11px] font-semibold text-slate-400">
+                    Bisa pilih lebih dari satu
+                  </span>
+                </div>
+
+                <p className="text-[11px] text-slate-500">
+                  Tentukan jenis layanan di mana produk ini dapat ditampilkan dan dipesan. Default produk baru hanya aktif di layanan <b>Pickup</b>.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {/* Layanan 1: Pickup */}
+                  <div
+                    onClick={() => handleToggleService('pickup')}
+                    className={`flex flex-col justify-between rounded-xl border p-3 cursor-pointer transition select-none ${
+                      (form.availableServices || []).includes('pickup')
+                        ? 'border-emerald-500 bg-emerald-50/70 text-emerald-900 ring-1 ring-emerald-500/30'
+                        : 'border-slate-200 bg-slate-50/50 text-slate-500 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <ShoppingBag size={16} className={(form.availableServices || []).includes('pickup') ? 'text-emerald-600' : 'text-slate-400'} />
+                        <span className="text-xs font-bold">Layanan Pickup</span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={(form.availableServices || []).includes('pickup')}
+                        onChange={() => {}}
+                        className="rounded text-emerald-600 focus:ring-emerald-500 h-4 w-4 pointer-events-none"
+                      />
+                    </div>
+                    <p className="mt-2 text-[10.5px] leading-snug text-slate-500">
+                      Produk tersedia dibawa pulang langsung di kasir (Default).
+                    </p>
+                  </div>
+
+                  {/* Layanan 2: Dine In */}
+                  <div
+                    onClick={() => handleToggleService('dinein')}
+                    className={`flex flex-col justify-between rounded-xl border p-3 cursor-pointer transition select-none ${
+                      (form.availableServices || []).includes('dinein')
+                        ? 'border-indigo-500 bg-indigo-50/70 text-indigo-900 ring-1 ring-indigo-500/30'
+                        : 'border-slate-200 bg-slate-50/50 text-slate-500 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Table2 size={16} className={(form.availableServices || []).includes('dinein') ? 'text-indigo-600' : 'text-slate-400'} />
+                        <span className="text-xs font-bold">Layanan Dine In</span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={(form.availableServices || []).includes('dinein')}
+                        onChange={() => {}}
+                        className="rounded text-indigo-600 focus:ring-indigo-500 h-4 w-4 pointer-events-none"
+                      />
+                    </div>
+                    <p className="mt-2 text-[10.5px] leading-snug text-slate-500">
+                      Konsumsi di tempat &amp; QR Meja. Khusus makanan &amp; minuman.
+                    </p>
+                  </div>
+
+                  {/* Layanan 3: Delivery */}
+                  <div
+                    onClick={() => handleToggleService('delivery')}
+                    className={`flex flex-col justify-between rounded-xl border p-3 cursor-pointer transition select-none ${
+                      (form.availableServices || []).includes('delivery')
+                        ? 'border-amber-500 bg-amber-50/70 text-amber-900 ring-1 ring-amber-500/30'
+                        : 'border-slate-200 bg-slate-50/50 text-slate-500 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Truck size={16} className={(form.availableServices || []).includes('delivery') ? 'text-amber-600' : 'text-slate-400'} />
+                        <span className="text-xs font-bold">Layanan Delivery</span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={(form.availableServices || []).includes('delivery')}
+                        onChange={() => {}}
+                        className="rounded text-amber-600 focus:ring-amber-500 h-4 w-4 pointer-events-none"
+                      />
+                    </div>
+                    <p className="mt-2 text-[10.5px] leading-snug text-slate-500">
+                      Tersedia untuk pesanan antar kurir toko / ekspedisi.
+                    </p>
+                  </div>
                 </div>
               </div>
 

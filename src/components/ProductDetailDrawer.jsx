@@ -14,6 +14,9 @@ import {
   AlertCircle,
   Copy,
   CheckCheck,
+  ShoppingBag,
+  Table2,
+  Truck,
 } from 'lucide-react';
 import BarcodeLabel from './common/BarcodeLabel';
 
@@ -61,17 +64,26 @@ export default function ProductDetailDrawer({
   if (!isOpen || !product) return null;
 
   const currentDesc = meta?.deskripsi || '';
-  const isPromoActive = Boolean(meta?.promoActive);
-  const promoType = meta?.promoType || 'nominal';
+  const today = new Date().toISOString().slice(0, 10);
+  const isDateValid =
+    (!meta?.promoStartDate || today >= meta.promoStartDate.slice(0, 10)) &&
+    (!meta?.promoEndDate || today <= meta.promoEndDate.slice(0, 10));
+  const isPromoActive = Boolean((meta?.promoActive || meta?.b1g1) && isDateValid);
+  const promoType = meta?.promoType || (meta?.b1g1 ? 'b1g1' : 'nominal');
   const promoValue = Number(meta?.promoValue) || 0;
 
   // Calculate discounted price
   const basePrice = Number(product.harga || 0);
   let effectivePrice = basePrice;
   let discountAmount = 0;
-  if (isPromoActive && basePrice > 0 && promoValue > 0) {
-    discountAmount = promoType === 'persen' ? (basePrice * promoValue) / 100 : promoValue;
-    effectivePrice = Math.max(0, basePrice - discountAmount);
+  if (isPromoActive && basePrice > 0) {
+    if (promoType === 'persen' && promoValue > 0) {
+      discountAmount = Math.round((basePrice * promoValue) / 100);
+      effectivePrice = Math.max(0, basePrice - discountAmount);
+    } else if (promoType === 'nominal' && promoValue > 0) {
+      discountAmount = Math.min(basePrice, promoValue);
+      effectivePrice = Math.max(0, basePrice - discountAmount);
+    }
   }
 
   const handleCopyCode = () => {
@@ -309,6 +321,56 @@ export default function ProductDetailDrawer({
                   <span className="text-[10px] text-slate-400">
                     {Number(product.minStok) > 0 ? 'Khusus produk ini' : 'Batas default toko'}
                   </span>
+                </div>
+              </div>
+
+              {/* Ketersediaan Jenis Layanan (Pickup, Dine In, Delivery) */}
+              <div className="rounded-2xl border border-slate-200 bg-white p-3.5 space-y-2 shadow-2xs">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
+                  Ketersediaan Layanan Toko
+                </span>
+                <div className="grid grid-cols-3 gap-2">
+                  <div
+                    className={`flex flex-col items-center justify-center p-2 rounded-xl border text-center transition ${
+                      product.availableServices?.includes('pickup')
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                        : 'border-slate-100 bg-slate-50/70 text-slate-400 opacity-60'
+                    }`}
+                  >
+                    <ShoppingBag size={15} className={product.availableServices?.includes('pickup') ? 'text-emerald-600' : 'text-slate-300'} />
+                    <span className="text-[11px] font-bold mt-1">Pickup</span>
+                    <span className="text-[9.5px]">
+                      {product.availableServices?.includes('pickup') ? 'Aktif' : 'Nonaktif'}
+                    </span>
+                  </div>
+
+                  <div
+                    className={`flex flex-col items-center justify-center p-2 rounded-xl border text-center transition ${
+                      product.availableServices?.includes('dinein')
+                        ? 'border-indigo-200 bg-indigo-50 text-indigo-800'
+                        : 'border-slate-100 bg-slate-50/70 text-slate-400 opacity-60'
+                    }`}
+                  >
+                    <Table2 size={15} className={product.availableServices?.includes('dinein') ? 'text-indigo-600' : 'text-slate-300'} />
+                    <span className="text-[11px] font-bold mt-1">Dine In</span>
+                    <span className="text-[9.5px]">
+                      {product.availableServices?.includes('dinein') ? 'Aktif' : 'Nonaktif'}
+                    </span>
+                  </div>
+
+                  <div
+                    className={`flex flex-col items-center justify-center p-2 rounded-xl border text-center transition ${
+                      product.availableServices?.includes('delivery')
+                        ? 'border-amber-200 bg-amber-50 text-amber-900'
+                        : 'border-slate-100 bg-slate-50/70 text-slate-400 opacity-60'
+                    }`}
+                  >
+                    <Truck size={15} className={product.availableServices?.includes('delivery') ? 'text-amber-600' : 'text-slate-300'} />
+                    <span className="text-[11px] font-bold mt-1">Delivery</span>
+                    <span className="text-[9.5px]">
+                      {product.availableServices?.includes('delivery') ? 'Aktif' : 'Nonaktif'}
+                    </span>
+                  </div>
                 </div>
               </div>
 

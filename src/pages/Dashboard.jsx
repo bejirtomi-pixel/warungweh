@@ -509,7 +509,7 @@ export default function Dashboard() {
         {/* =========================================================
             A. EMPAT KARTU STATISTIK (DAPAT DIKLIK & TERHUBUNG)
         ========================================================= */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-4 gap-2.5 sm:gap-4">
           {statCards.map((card) => {
             const Icon = card.icon;
 
@@ -517,19 +517,19 @@ export default function Dashboard() {
               <Link
                 key={card.id}
                 to={card.to}
-                className="group relative flex flex-col justify-between rounded-2xl border border-slate-200/90 bg-white p-5 shadow-xs transition-all duration-200 hover:-translate-y-1 hover:border-emerald-300 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                className="group relative flex flex-col justify-between rounded-xl sm:rounded-2xl border border-slate-200/90 bg-white p-3.5 sm:p-5 shadow-xs transition-all duration-200 hover:-translate-y-1 hover:border-emerald-300 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                 title={`Buka ${card.label}`}
               >
                 <div>
-                  <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start justify-between gap-2 sm:gap-3">
                     <div
-                      className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${card.accent} text-white shadow-sm transition-transform duration-200 group-hover:scale-105`}
+                      className={`flex h-9 w-9 sm:h-11 sm:w-11 shrink-0 items-center justify-center rounded-lg sm:rounded-xl ${card.accent} text-white shadow-sm transition-transform duration-200 group-hover:scale-105`}
                     >
-                      <Icon size={22} />
+                      <Icon className="h-4.5 w-4.5 sm:h-5 sm:w-5" />
                     </div>
 
                     <span
-                      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${
+                      className={`inline-flex items-center gap-0.5 sm:gap-1 rounded-full border px-1.5 sm:px-2.5 py-0.5 text-[10px] sm:text-[11px] font-bold ${
                         card.badgeStyle
                           ? card.badgeStyle
                           : card.trend === 'up'
@@ -539,29 +539,31 @@ export default function Dashboard() {
                               : 'bg-slate-100 text-slate-600 border-slate-200'
                       }`}
                     >
-                      {card.trend === 'up' && <ArrowUpRight size={13} />}
-                      {card.trend === 'down' && <ArrowDownRight size={13} />}
-                      {card.badgeText}
+                      {card.trend === 'up' && <ArrowUpRight size={11} className="sm:hidden" />}
+                      {card.trend === 'up' && <ArrowUpRight size={13} className="hidden sm:inline" />}
+                      {card.trend === 'down' && <ArrowDownRight size={11} className="sm:hidden" />}
+                      {card.trend === 'down' && <ArrowDownRight size={13} className="hidden sm:inline" />}
+                      <span className="truncate max-w-[70px] sm:max-w-none">{card.badgeText}</span>
                     </span>
                   </div>
 
-                  <p className="mt-4 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  <p className="mt-2.5 sm:mt-4 text-[10px] sm:text-xs font-semibold uppercase tracking-wider text-slate-500">
                     {card.label}
                   </p>
-                  <p className="mt-1 text-2xl font-black tracking-tight text-slate-800">
+                  <p className="mt-0.5 sm:mt-1 text-base sm:text-2xl font-black tracking-tight text-slate-800 truncate">
                     {card.value}
                   </p>
                 </div>
 
-                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                  <span className="text-slate-500 truncate pr-2">
+                <div className="mt-3 sm:mt-4 pt-2.5 sm:pt-3 border-t border-slate-100 flex items-center justify-between text-[10px] sm:text-xs">
+                  <span className="text-slate-500 truncate pr-1">
                     {card.subtext}
                   </span>
                   <span className="inline-flex items-center gap-0.5 font-bold text-emerald-600 group-hover:text-emerald-700 transition-colors shrink-0">
-                    <span>{card.actionLabel}</span>
+                    <span className="hidden sm:inline">{card.actionLabel}</span>
                     <ChevronRight
-                      size={13}
-                      className="transition-transform group-hover:translate-x-0.5"
+                      size={12}
+                      className="transition-transform group-hover:translate-x-0.5 sm:w-3.5 sm:h-3.5"
                     />
                   </span>
                 </div>
@@ -833,8 +835,89 @@ export default function Dashboard() {
             </Link>
           </div>
 
+          {/* Card List untuk Layar Mobile (HP < 640px) */}
+          <div className="block sm:hidden divide-y divide-slate-100">
+            {recentTransactions.map((trx, index) => {
+              const paymentMethod =
+                trx.paymentMethod || trx.metode || 'Tunai';
+              const isDigital =
+                trx.paymentCategory === 'Digital' ||
+                ['QRIS', 'GoPay', 'OVO', 'DANA', 'ShopeePay', 'LinkAja', 'Transfer Bank'].includes(paymentMethod);
+              const paymentStatus = trx.paymentStatus || 'Lunas';
+              const orderType = trx.orderType || (trx.isDelivery ? 'Delivery' : 'Pickup');
+
+              return (
+                <div key={trx.id || index} className="p-3.5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 font-mono text-xs font-bold text-emerald-700">
+                      <span>{trx.id}</span>
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                          orderType === 'Delivery' || orderType === 'Dikirim'
+                            ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        {orderType === 'Delivery' || orderType === 'Dikirim' ? 'Delivery' : 'Pickup'}
+                      </span>
+                    </div>
+                    <span className="text-xs font-black text-slate-800">
+                      {formatRupiah(Number(trx.total) || 0)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between text-[11px] text-slate-500">
+                    <div className="flex items-center gap-1">
+                      <Clock size={11} className="text-slate-400" />
+                      <span>{formatDateTime(trx.tanggal || trx.date || trx.createdAt)}</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <User size={11} className="text-slate-400" />
+                      <span>{trx.kasir || 'Admin'}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <div className="flex items-center gap-1">
+                      <span
+                        className={`inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-semibold ${
+                          isDigital
+                            ? 'bg-violet-50 text-violet-700 border border-violet-200'
+                            : paymentMethod === 'Hutang'
+                              ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                              : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        }`}
+                      >
+                        {paymentMethod}
+                      </span>
+                      <span
+                        className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                          paymentStatus === 'Lunas'
+                            ? 'text-emerald-700 bg-emerald-100/60'
+                            : paymentStatus === 'Hutang'
+                              ? 'text-rose-700 bg-rose-100/60'
+                              : 'text-amber-700 bg-amber-100/60'
+                        }`}
+                      >
+                        {paymentStatus}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTrx(trx)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-bold text-slate-700 transition hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-300"
+                    >
+                      <Eye size={12} />
+                      <span>Detail</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
           {/* Tabel Transaksi */}
-          <div className="overflow-x-auto">
+          <div className="hidden sm:block overflow-x-auto">
             <table className="w-full min-w-[700px] text-left text-xs sm:text-sm">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-bold uppercase tracking-wider text-slate-600">

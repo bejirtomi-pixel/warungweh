@@ -16,8 +16,10 @@ export default function Logo({
   size = 'md',
   showText = false,
   textClassName = 'font-bold text-slate-800 text-lg tracking-tight',
-  alt = 'Logo Qurmacel POS',
+  alt = 'Logo Wartomson Store',
   src = '/logo.jpg',
+  title = 'Wartomson Store',
+  isMobile = false,
 }) {
   const sizeClasses = {
     sm: 'h-7 w-auto max-w-[120px]',
@@ -30,16 +32,16 @@ export default function Logo({
   const selectedSizeClass = sizeClasses[size] || (typeof size === 'string' ? size : 'h-10 w-auto');
 
   return (
-    <div className={`inline-flex items-center gap-3 ${className}`}>
+    <div className={`inline-flex items-center gap-2.5 ${className}`}>
       <img
         src={src || '/logo.jpg'}
         alt={alt}
-        className={`${selectedSizeClass} object-contain rounded-md transition-all duration-200 ${imgClassName}`}
+        className={`${selectedSizeClass} object-contain rounded-lg transition-all duration-200 ${imgClassName}`}
         loading="eager"
       />
       {showText && (
         <span className={textClassName}>
-          Qurmacel <span className="text-emerald-600 font-extrabold">POS</span>
+          Wartomson <span className="text-emerald-600 font-extrabold">Store</span>
         </span>
       )}
     </div>

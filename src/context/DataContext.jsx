@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from '../firebase';
 import { doc, getDoc } from 'firebase/firestore';
-import { logActivity } from '../utils/activityLogger';
+import { logActivity, logAuditTrail } from '../utils/activityLogger';
 import {
   fetchUserData,
   pushItems,
@@ -44,7 +44,102 @@ const DEFAULT_PRINTER_SETTINGS = {
   autoPrint: false,
 };
 
-function normalizeProduct(p = {}) {
+export function isProductAvailableForService(product, serviceType, options = {}) {
+  if (!product) return false;
+  if (product.status && product.status === 'Nonaktif') return false;
+
+  const services = Array.isArray(product.availableServices) && product.availableServices.length > 0
+    ? product.availableServices
+    : (product.availableInPickup || product.availableInDineIn || product.availableInDelivery)
+      ? [
+          ...(product.availableInPickup ? ['pickup'] : []),
+          ...(product.availableInDineIn ? ['dinein'] : []),
+          ...(product.availableInDelivery ? ['delivery'] : []),
+        ]
+      : ['pickup'];
+
+  const normType = String(serviceType || '')
+    .toLowerCase()
+    .replace(/[-_\s]/g, '');
+
+  if (normType === 'pickup') {
+    if (!services.includes('pickup')) return false;
+    if (product.isDineInOnly && !services.includes('pickup')) return false;
+    return true;
+  }
+
+  if (normType === 'dinein') {
+    if (!services.includes('dinein')) return false;
+    const cat = String(product.kategori || '').toLowerCase().trim();
+    const isExcluded =
+      cat.includes('sembako') ||
+      cat.includes('cemilan') ||
+      cat.includes('camilan') ||
+      cat.includes('snack') ||
+      cat.includes('rokok') ||
+      cat.includes('sabun') ||
+      cat.includes('lainnya');
+    if (isExcluded && !product.isDineInOnly) return false;
+
+    const isMakanan = cat.includes('makan') || product.isCooked === true;
+    const isMinuman = cat.includes('minum');
+    return isMakanan || isMinuman || Boolean(product.isDineInOnly);
+  }
+
+  if (normType === 'delivery') {
+    if (!services.includes('delivery')) return false;
+    if (options.subTab === 'pickup') {
+      return services.includes('pickup');
+    }
+    if (options.subTab === 'dinein') {
+      if (!services.includes('dinein')) return false;
+      const cat = String(product.kategori || '').toLowerCase().trim();
+      const isExcluded =
+        cat.includes('sembako') ||
+        cat.includes('cemilan') ||
+        cat.includes('camilan') ||
+        cat.includes('snack') ||
+        cat.includes('rokok') ||
+        cat.includes('sabun') ||
+        cat.includes('lainnya');
+      if (isExcluded && !product.isDineInOnly) return false;
+      return cat.includes('makan') || cat.includes('minum') || product.isCooked === true || Boolean(product.isDineInOnly);
+    }
+    return true;
+  }
+
+  return true;
+}
+
+export function normalizeProduct(p = {}) {
+  let availableServices = [];
+  if (Array.isArray(p.availableServices) && p.availableServices.length > 0) {
+    availableServices = [...new Set(p.availableServices.map((s) => String(s).toLowerCase().trim()))].filter((s) =>
+      ['pickup', 'dinein', 'delivery'].includes(s)
+    );
+  } else if (p.availableInPickup !== undefined || p.availableInDineIn !== undefined || p.availableInDelivery !== undefined) {
+    if (p.availableInPickup) availableServices.push('pickup');
+    if (p.availableInDineIn) availableServices.push('dinein');
+    if (p.availableInDelivery) availableServices.push('delivery');
+  } else if (p.isDineInOnly) {
+    availableServices = ['dinein'];
+  } else if (p.isDineInExcluded) {
+    availableServices = ['pickup', 'delivery'];
+  } else if (p.isNewProduct) {
+    availableServices = ['pickup'];
+  } else {
+    const cat = String(p.category || p.kategori || '').toLowerCase().trim();
+    const isMakanan = cat.includes('makan') || p.isCooked === true;
+    const isMinuman = cat.includes('minum');
+    if (isMakanan || isMinuman) {
+      availableServices = ['pickup', 'dinein', 'delivery'];
+    } else {
+      availableServices = ['pickup', 'delivery'];
+    }
+  }
+
+  const isDineInOnly = availableServices.includes('dinein') && !availableServices.includes('pickup') && !availableServices.includes('delivery');
+
   return {
     id: p.id || `PRD-${Date.now()}`,
     kode: p.barcode || p.kode || p.name || '',
@@ -60,6 +155,15 @@ function normalizeProduct(p = {}) {
     pajakAktif: Boolean(p.pajakAktif),
     pajakJenis: p.pajakJenis || 'PPN',
     pajakPersen: p.pajakPersen !== undefined && p.pajakPersen !== null ? Number(p.pajakPersen) : 10,
+    deskripsi: p.deskripsi || '',
+    availableServices,
+    availableInPickup: availableServices.includes('pickup'),
+    availableInDineIn: availableServices.includes('dinein'),
+    availableInDelivery: availableServices.includes('delivery'),
+    isDineInOnly: Boolean(p.isDineInOnly || isDineInOnly),
+    isDineInExcluded: Boolean(p.isDineInExcluded || !availableServices.includes('dinein')),
+    dineInCategory: p.dineInCategory || (p.kategori === 'Makanan' ? 'Makanan' : p.kategori === 'Minuman' ? 'Minuman' : ''),
+    isCooked: p.isCooked !== undefined ? Boolean(p.isCooked) : undefined,
   };
 }
 
@@ -284,6 +388,30 @@ export function DataProvider({ children }) {
     (product) => {
       const normalized = normalizeProduct(product);
       persistProducts([normalized, ...products]);
+      logActivity({
+        action: 'PRODUCT_CREATED',
+        module: 'KATALOG_STOK',
+        targetId: normalized.id,
+        details: { nama: normalized.nama, harga: normalized.harga, stok: normalized.stok, kategori: normalized.kategori },
+        status: 'SUCCESS',
+      });
+      logAuditTrail({
+        module: 'KATALOG_STOK',
+        action: 'PRODUCT_CREATED',
+        targetId: normalized.id,
+        field: 'all',
+        before: null,
+        after: {
+          nama: normalized.nama,
+          harga: normalized.harga,
+          hargaModal: normalized.hargaModal,
+          stok: normalized.stok,
+          kategori: normalized.kategori,
+          satuan: normalized.satuan,
+        },
+        details: { note: `Produk "${normalized.nama}" berhasil ditambahkan` },
+        status: 'SUCCESS',
+      });
     },
     [products, persistProducts]
   );
@@ -291,19 +419,71 @@ export function DataProvider({ children }) {
   const updateProduct = useCallback(
     (updated) => {
       const normalized = normalizeProduct(updated);
+      const oldProduct = products.find((p) => p.id === normalized.id);
       persistProducts(
         products.map((p) => (p.id === normalized.id ? normalized : p))
       );
+      logActivity({
+        action: 'PRODUCT_UPDATED',
+        module: 'KATALOG_STOK',
+        targetId: normalized.id,
+        details: { nama: normalized.nama, harga: normalized.harga, stok: normalized.stok },
+        status: 'SUCCESS',
+      });
+      logAuditTrail({
+        module: 'KATALOG_STOK',
+        action: 'PRODUCT_UPDATED',
+        targetId: normalized.id,
+        field: 'product_data',
+        before: oldProduct
+          ? {
+              nama: oldProduct.nama,
+              harga: oldProduct.harga,
+              hargaModal: oldProduct.hargaModal,
+              stok: oldProduct.stok,
+              kategori: oldProduct.kategori,
+              status: oldProduct.status,
+            }
+          : null,
+        after: {
+          nama: normalized.nama,
+          harga: normalized.harga,
+          hargaModal: normalized.hargaModal,
+          stok: normalized.stok,
+          kategori: normalized.kategori,
+          status: normalized.status,
+        },
+        details: { note: `Produk "${normalized.nama}" berhasil diperbarui` },
+        status: 'SUCCESS',
+      });
     },
     [products, persistProducts]
   );
 
   const deleteProduct = useCallback(
     (id) => {
+      const oldProduct = products.find((p) => p.id === id);
       persistProducts(products.filter((p) => p.id !== id));
       persistProductMeta(
         productMeta.filter((m) => m.productId !== id)
       );
+      logActivity({
+        action: 'PRODUCT_DELETED',
+        module: 'KATALOG_STOK',
+        targetId: id,
+        details: { nama: oldProduct?.nama || id },
+        status: 'SUCCESS',
+      });
+      logAuditTrail({
+        module: 'KATALOG_STOK',
+        action: 'PRODUCT_DELETED',
+        targetId: id,
+        field: 'all',
+        before: oldProduct || { id },
+        after: null,
+        details: { note: `Produk "${oldProduct?.nama || id}" dihapus` },
+        status: 'SUCCESS',
+      });
     },
     [products, productMeta, persistProducts, persistProductMeta]
   );
@@ -517,16 +697,11 @@ export function DataProvider({ children }) {
 
         if (existingSession) {
           targetSessionId = existingSession.id;
-        } else if (source === 'qr_menu') {
-          // Meja belum aktif: pelanggan belum boleh membuat pesanan sebelum diaktifkan kasir
-          return {
-            error: 'TABLE_NOT_ACTIVE',
-            message: 'Meja ini belum diaktifkan oleh kasir. Silakan hubungi kasir/staf untuk mengaktifkan meja.',
-          };
         } else {
-          // Pesanan langsung kasir di meja kosong: otomatis buat sesi
+          // Meja belum ada sesi aktif (baik dipindai via QR Menu atau Kasir): otomatis buat sesi meja aktif baru
           const newSessionId = `SES-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
           targetSessionId = newSessionId;
+          const isDirectPaid = paymentStatus === 'paid';
           const newSession = {
             id: newSessionId,
             tableId: targetTable?.id || tableId,
@@ -536,13 +711,13 @@ export function DataProvider({ children }) {
             closedAt: null,
             orderIds: [generatedOrderId],
             customerName: customerName.trim() || `Tamu ${targetTable?.name || ''}`,
-            subtotal: calcSubtotal,
-            tax: calcTax,
-            discount: calcDiscount,
-            total: calcTotal,
-            paymentStatus: 'unpaid',
-            paymentMethod: null,
-            settledBy: null,
+            subtotal: source === 'qr_menu' ? 0 : calcSubtotal,
+            tax: source === 'qr_menu' ? 0 : calcTax,
+            discount: source === 'qr_menu' ? 0 : calcDiscount,
+            total: source === 'qr_menu' ? 0 : calcTotal,
+            paymentStatus: isDirectPaid ? 'paid' : 'unpaid',
+            paymentMethod: isDirectPaid ? paymentMethod || 'Tunai' : null,
+            settledBy: isDirectPaid ? 'Kasir' : null,
             notes: notes || '',
             createdAt: nowIso,
             updatedAt: nowIso,
@@ -555,6 +730,19 @@ export function DataProvider({ children }) {
           );
 
           persistTableSessions([newSession, ...tableSessions]);
+
+          logAuditTrail({
+            module: 'KASIR_POS',
+            action: 'TABLE_SESSION_OPENED',
+            targetId: newSessionId,
+            field: 'status',
+            before: null,
+            after: { status: 'active', tableId: targetTable?.id || tableId, tableName: targetTable?.name },
+            actorName: source === 'qr_menu' ? newSession.customerName : 'Kasir',
+            actorRole: source === 'qr_menu' ? 'CUSTOMER' : 'KASIR',
+            details: { note: `Sesi meja dibuka via ${source}` },
+            status: 'SUCCESS',
+          });
         }
       }
 
@@ -633,6 +821,8 @@ export function DataProvider({ children }) {
             const sDisc = allSessionOrders.reduce((sum, o) => sum + (Number(o.discount) || 0), 0);
             const sTot = Math.max(0, sSub - sDisc + sTax);
 
+            const allPaid = allSessionOrders.every((o) => o.paymentStatus === 'paid');
+
             return {
               ...s,
               orderIds: updatedOrderIds,
@@ -640,6 +830,7 @@ export function DataProvider({ children }) {
               tax: sTax,
               discount: sDisc,
               total: sTot,
+              paymentStatus: allPaid ? 'paid' : s.paymentStatus === 'paid' ? 'unpaid' : s.paymentStatus,
               updatedAt: nowIso,
             };
           })
@@ -732,6 +923,8 @@ export function DataProvider({ children }) {
             const sDisc = allAcceptedOrders.reduce((sum, o) => sum + (Number(o.discount) || 0), 0);
             const sTot = Math.max(0, sSub - sDisc + sTax);
 
+            const allPaid = allAcceptedOrders.length > 0 && allAcceptedOrders.every((o) => o.paymentStatus === 'paid');
+
             return {
               ...s,
               orderIds: updatedOrderIds,
@@ -739,6 +932,7 @@ export function DataProvider({ children }) {
               tax: sTax,
               discount: sDisc,
               total: sTot,
+              paymentStatus: allPaid ? 'paid' : s.paymentStatus === 'paid' ? 'unpaid' : s.paymentStatus,
               updatedAt: nowIso,
             };
           })
@@ -755,6 +949,20 @@ export function DataProvider({ children }) {
         sessionId: existing.sessionId,
         orderId,
         details: { orderNumber: existing.orderNumber, total: existing.total },
+        status: 'SUCCESS',
+      });
+
+      logAuditTrail({
+        module: 'KASIR_POS',
+        action: 'ORDER_ACCEPTED',
+        targetId: orderId,
+        field: 'orderStatus & fulfillmentStatus',
+        before: { orderStatus: existing.orderStatus, fulfillmentStatus: existing.fulfillmentStatus },
+        after: { orderStatus: 'confirmed', fulfillmentStatus: 'preparing' },
+        actorUid: kasirUid,
+        actorName: kasirName,
+        actorRole: 'KASIR',
+        details: { note: `Pesanan ${existing.orderNumber || orderId} dikonfirmasi oleh ${kasirName}` },
         status: 'SUCCESS',
       });
 
@@ -842,6 +1050,20 @@ export function DataProvider({ children }) {
         status: 'SUCCESS',
       });
 
+      logAuditTrail({
+        module: 'KASIR_POS',
+        action: 'ORDER_REJECTED',
+        targetId: orderId,
+        field: 'orderStatus',
+        before: { orderStatus: existing.orderStatus },
+        after: { orderStatus: 'cancelled', rejectionReason: reason },
+        actorUid: kasirUid,
+        actorName: kasirName,
+        actorRole: 'KASIR',
+        details: { reason },
+        status: 'SUCCESS',
+      });
+
       return true;
     },
     [orders, products, tableSessions, persistProducts, persistOrders, persistTableSessions]
@@ -860,6 +1082,28 @@ export function DataProvider({ children }) {
       if (fulfillmentStatus !== undefined) patch.fulfillmentStatus = fulfillmentStatus;
       if (paymentStatus !== undefined) patch.paymentStatus = paymentStatus;
       if (cancellationReason !== undefined) patch.cancellationReason = cancellationReason;
+
+      // Validasi pembatalan oleh pelanggan:
+      // Pelanggan HANYA boleh membatalkan pesanan sebelum dikonfirmasi kasir (orderStatus === 'pending')
+      const isCustomerCancellation =
+        cancellationReason &&
+        (String(cancellationReason).toLowerCase().includes('pelanggan') ||
+          String(cancellationReason).toLowerCase().includes('dibatalkan pelanggan'));
+
+      if (isCustomerCancellation && orderStatus === 'cancelled') {
+        const isNotPending =
+          existing.orderStatus !== 'pending' ||
+          (existing.fulfillmentStatus && existing.fulfillmentStatus !== 'pending');
+
+        if (isNotPending) {
+          throw new Error('Pesanan telah dikonfirmasi oleh kasir dan tidak dapat dibatalkan.');
+        }
+
+        const cleanReason = String(cancellationReason).replace(/^Dibatalkan Pelanggan:\s*/i, '').trim();
+        if (!cleanReason) {
+          throw new Error('Alasan pembatalan wajib disertakan.');
+        }
+      }
 
       // Pengembalian stok otomatis jika pesanan dibatalkan / ditolak kasir
       if (orderStatus === 'cancelled' && existing.orderStatus !== 'cancelled') {
@@ -900,9 +1144,53 @@ export function DataProvider({ children }) {
         }
       }
 
+      // Sinkronkan status pembayaran ke sesi meja jika order bagian dari sesi
+      if (paymentStatus === 'paid' && existing.sessionId) {
+        persistTableSessions(
+          tableSessions.map((s) => {
+            if (s.id !== existing.sessionId) return s;
+            const sessionOrders = orders
+              .map((o) => (o.id === orderId ? { ...o, ...patch } : o))
+              .filter(
+                (o) => (s.orderIds || []).includes(o.id) && o.orderStatus !== 'cancelled'
+              );
+            const allPaid =
+              sessionOrders.length > 0 &&
+              sessionOrders.every((o) => o.paymentStatus === 'paid');
+            return {
+              ...s,
+              paymentStatus: allPaid ? 'paid' : s.paymentStatus,
+              updatedAt: nowIso,
+            };
+          })
+        );
+      }
+
       persistOrders(
         orders.map((o) => (o.id === orderId ? { ...o, ...patch } : o))
       );
+
+      logAuditTrail({
+        module: 'KASIR_POS',
+        action: 'ORDER_STATUS_CHANGED',
+        targetId: orderId,
+        field: 'orderStatus & fulfillmentStatus',
+        before: {
+          orderStatus: existing.orderStatus,
+          fulfillmentStatus: existing.fulfillmentStatus,
+          paymentStatus: existing.paymentStatus,
+        },
+        after: {
+          orderStatus: patch.orderStatus || existing.orderStatus,
+          fulfillmentStatus: patch.fulfillmentStatus || existing.fulfillmentStatus,
+          paymentStatus: patch.paymentStatus || existing.paymentStatus,
+          cancellationReason: patch.cancellationReason || existing.cancellationReason || null,
+        },
+        actorName: isCustomerCancellation ? existing.customerName || 'Pelanggan' : 'Kasir',
+        actorRole: isCustomerCancellation ? 'CUSTOMER' : 'KASIR',
+        details: { note: patch.cancellationReason || `Status diubah ke ${patch.orderStatus || patch.fulfillmentStatus}` },
+        status: 'SUCCESS',
+      });
     },
     [orders, products, tableSessions, persistOrders, persistProducts, persistTableSessions]
   );
@@ -964,54 +1252,66 @@ export function DataProvider({ children }) {
         )
       );
 
-      // Gabungkan seluruh item pesanan dari sesi ini menjadi satu transaksi final
+      // Periksa pesanan aktif dalam sesi ini dan pisahkan yang belum dibayar
       const sessionOrders = orders.filter(
-        (o) => (session.orderIds || []).includes(o.id) && o.orderStatus !== 'cancelled'
+        (o) => (session.orderIds || []).includes(o.id) && o.orderStatus !== 'cancelled' && o.orderStatus !== 'rejected'
       );
-      const consolidatedItems = [];
-      sessionOrders.forEach((o) => {
-        (o.items || []).forEach((it) => {
-          const ex = consolidatedItems.find((ci) => ci.id === it.id);
-          if (ex) {
-            ex.qty += Number(it.qty) || 0;
-          } else {
-            consolidatedItems.push({ ...it, qty: Number(it.qty) || 1 });
-          }
+      const unpaidOrders = sessionOrders.filter((o) => o.paymentStatus !== 'paid');
+
+      let finalTrx = null;
+
+      // HANYA buat transaksi baru jika ada pesanan yang belum dibayar sebelumnya (Cegah pembayaran ganda & duplikasi pendapatan)
+      if (unpaidOrders.length > 0) {
+        const consolidatedItems = [];
+        unpaidOrders.forEach((o) => {
+          (o.items || []).forEach((it) => {
+            const ex = consolidatedItems.find((ci) => ci.id === it.id);
+            if (ex) {
+              ex.qty += Number(it.qty) || 0;
+            } else {
+              consolidatedItems.push({ ...it, qty: Number(it.qty) || 1 });
+            }
+          });
         });
-      });
 
-      const finalTrx = {
-        id: generateTransactionId(),
-        tanggal: new Date().toLocaleDateString('id-ID', {
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-        }),
-        kasir,
-        customer: session.customerName || `Tamu ${session.tableName}`,
-        items: consolidatedItems,
-        subtotal: session.subtotal,
-        discount: session.discount,
-        tax: session.tax,
-        totalPajak: session.tax,
-        total: session.total,
-        paid: Number(paid) || session.total,
-        change: Number(change) || 0,
-        paymentCategory,
-        paymentMethod,
-        metode: paymentMethod,
-        paymentStatus: 'Lunas',
-        status: 'Selesai',
-        orderType: 'dine_in',
-        tableId: session.tableId,
-        tableName: session.tableName,
-        sessionId: session.id,
-        createdAt: nowIso,
-      };
+        const unpaidSubtotal = unpaidOrders.reduce((sum, o) => sum + (Number(o.subtotal) || 0), 0);
+        const unpaidDiscount = unpaidOrders.reduce((sum, o) => sum + (Number(o.discount) || 0), 0);
+        const unpaidTax = unpaidOrders.reduce((sum, o) => sum + (Number(o.tax) || 0), 0);
+        const unpaidTotal = Math.max(0, unpaidSubtotal - unpaidDiscount + unpaidTax);
 
-      persistTransactions([finalTrx, ...transactions]);
+        finalTrx = {
+          id: generateTransactionId(),
+          tanggal: new Date().toLocaleDateString('id-ID', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+          kasir,
+          customer: session.customerName || `Tamu ${session.tableName}`,
+          items: consolidatedItems,
+          subtotal: unpaidSubtotal,
+          discount: unpaidDiscount,
+          tax: unpaidTax,
+          totalPajak: unpaidTax,
+          total: unpaidTotal,
+          paid: Number(paid) || unpaidTotal,
+          change: Number(change) || 0,
+          paymentCategory,
+          paymentMethod,
+          metode: paymentMethod,
+          paymentStatus: 'Lunas',
+          status: 'Selesai',
+          orderType: 'dine_in',
+          tableId: session.tableId,
+          tableName: session.tableName,
+          sessionId: session.id,
+          createdAt: nowIso,
+        };
+
+        persistTransactions([finalTrx, ...transactions]);
+      }
 
       logActivity({
         actorUid: settlementData.kasirUid || 'KASIR',
@@ -1024,9 +1324,36 @@ export function DataProvider({ children }) {
         details: {
           tableName: session.tableName,
           total: session.total,
+          unpaidSettled: unpaidOrders.length,
           paymentMethod,
-          transactionId: finalTrx.id,
+          transactionId: finalTrx?.id || null,
         },
+        status: 'SUCCESS',
+      });
+
+      logAuditTrail({
+        module: 'KASIR_POS',
+        action: 'TABLE_SESSION_CLOSED',
+        targetId: session.id,
+        field: 'status & paymentStatus',
+        before: {
+          status: session.status,
+          paymentStatus: session.paymentStatus,
+          total: session.total,
+          tableId: session.tableId,
+        },
+        after: {
+          status: 'closed',
+          paymentStatus: 'paid',
+          paymentMethod,
+          total: session.total,
+          settledBy: kasir,
+          finalTransactionId: finalTrx.id,
+        },
+        actorName: kasir,
+        operatorName: kasir,
+        actorRole: 'KASIR',
+        details: { note: `Sesi meja ${session.tableName || session.id} ditutup dan dibayar lunas (${paymentMethod})` },
         status: 'SUCCESS',
       });
 
@@ -1233,6 +1560,43 @@ export function DataProvider({ children }) {
       });
 
       persistProducts(nextProducts);
+
+      logActivity({
+        actorName: transaction.kasir || 'Kasir',
+        operatorName: transaction.kasir || null,
+        actorRole: 'KASIR',
+        action: 'TRANSACTION_COMPLETED',
+        module: 'TRANSAKSI',
+        targetId: transaction.id,
+        details: {
+          nomor: transaction.nomor || transaction.id,
+          total: transaction.total,
+          paymentMethod: transaction.metodePembayaran,
+        },
+        status: 'SUCCESS',
+      });
+
+      logAuditTrail({
+        module: 'KASIR_POS',
+        action: 'TRANSACTION_CREATED',
+        targetId: transaction.id,
+        field: 'transaction',
+        before: null,
+        after: {
+          nomor: transaction.nomor || transaction.id,
+          total: transaction.total,
+          bayar: transaction.bayar,
+          kembali: transaction.kembali,
+          metodePembayaran: transaction.metodePembayaran,
+          kasir: transaction.kasir || 'Kasir',
+          itemCount: items.length,
+        },
+        actorName: transaction.kasir || 'Kasir',
+        operatorName: transaction.kasir || null,
+        actorRole: 'KASIR',
+        details: { note: `Transaksi kasir ${transaction.nomor || transaction.id} berhasil disimpan` },
+        status: 'SUCCESS',
+      });
 
       return transaction;
     },
@@ -1580,6 +1944,8 @@ export function DataProvider({ children }) {
       updatePrinterSettings,
 
       resetData,
+
+      isProductAvailableForService,
 
       formatRupiah: formatCurrency,
       formatAngka: formatNumber,

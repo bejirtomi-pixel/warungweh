@@ -12,7 +12,10 @@ import {
   isAccountPending,
   isAccountSuspended,
   isAccountRejected,
+  isAccountUndetermined,
   normalizeRole,
+  isRoleAssigned,
+  DEFAULT_PERMISSIONS,
   DEFAULT_SUPER_ADMIN_EMAILS,
   DEFAULT_ADMIN_EMAILS,
   DEFAULT_CASHIER_EMAILS,
@@ -153,33 +156,26 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
-  // Identifikasi identitas akun
+  // Identifikasi identitas akun secara dinamis
   const email = (firebaseUser?.email || userProfile?.email || '').toLowerCase().trim();
-  const isDefaultSuper = DEFAULT_SUPER_ADMIN_EMAILS.includes(email);
-  const isDefaultAdmin = DEFAULT_ADMIN_EMAILS.includes(email);
-  const isDefaultCashier = DEFAULT_CASHIER_EMAILS.includes(email);
+  const isRootSuper = email === 'qurmacel@gmail.com';
 
   const normalizedRole = normalizeRole(userProfile?.role);
-  const role = isDefaultSuper
-    ? ROLES.SUPER_ADMIN
-    : isDefaultAdmin
-    ? ROLES.ADMIN
-    : isDefaultCashier
-    ? ROLES.KASIR
-    : normalizedRole;
+  const role = isRootSuper ? ROLES.SUPER_ADMIN : normalizedRole;
+  const hasAssignedRole = isRoleAssigned(role);
 
   const rawStatus = userProfile?.status;
-  const isApproved = isDefaultSuper || isDefaultAdmin || isDefaultCashier || isAccountApproved(rawStatus);
+  const isApproved = isRootSuper || isAccountApproved(rawStatus);
 
-  const isSuperAdmin = isDefaultSuper || role === ROLES.SUPER_ADMIN;
-  const isAdmin = !isSuperAdmin && (isDefaultAdmin || role === ROLES.ADMIN);
-  const isKasir = !isSuperAdmin && !isAdmin;
+  const isSuperAdmin = role === ROLES.SUPER_ADMIN;
+  const isAdmin = role === ROLES.ADMIN;
+  const isKasir = role === ROLES.KASIR;
 
-  const isActive = isApproved;
-  const isPending = !isActive && isAccountPending(rawStatus);
+  const isActive = hasAssignedRole && isApproved;
+  const isPending = !isActive && (isAccountPending(rawStatus) || !hasAssignedRole || isAccountUndetermined(rawStatus));
   const isSuspended = !isActive && isAccountSuspended(rawStatus);
   const isRejected = !isActive && isAccountRejected(rawStatus);
-  const status = isDefaultSuper || isDefaultAdmin || isDefaultCashier ? USER_STATUS.APPROVED : (rawStatus || USER_STATUS.PENDING);
+  const status = isRootSuper ? USER_STATUS.APPROVED : (rawStatus || 'belum_ditentukan');
 
   // Sesi Kasir Mandiri Handlers
   const isCashierShiftActive = Boolean(isKasir && cashierOperator?.name);
@@ -260,12 +256,37 @@ export function AuthProvider({ children }) {
     (permKey) => {
       if (!isActive) return false;
       if (isSuperAdmin) return true; // Super Admin selalu memiliki Full System Access
-      const userPerms = Array.isArray(userProfile?.permissions) ? userProfile.permissions : [];
+      const userPerms =
+        Array.isArray(userProfile?.permissions) && userProfile.permissions.length > 0
+          ? userProfile.permissions
+          : (DEFAULT_PERMISSIONS[role] || []);
       if (userPerms.includes('*')) return true;
       return userPerms.includes(permKey);
     },
-    [isActive, isSuperAdmin, userProfile]
+    [isActive, isSuperAdmin, role, userProfile]
   );
+
+  // Sync active user to local storage for background actors & loggers
+  useEffect(() => {
+    if (userProfile && firebaseUser) {
+      try {
+        localStorage.setItem(
+          'qurmacel_active_user',
+          JSON.stringify({
+            uid: firebaseUser.uid,
+            email: firebaseUser.email,
+            displayName: currentUserDisplay || userProfile.displayName || firebaseUser.displayName,
+            role,
+            status,
+          })
+        );
+      } catch {}
+    } else if (!firebaseUser) {
+      try {
+        localStorage.removeItem('qurmacel_active_user');
+      } catch {}
+    }
+  }, [userProfile, firebaseUser, currentUserDisplay, role, status]);
 
   // Page Access Verifier
   const hasPageAccess = useCallback(

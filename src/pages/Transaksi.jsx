@@ -42,10 +42,14 @@ import {
   Layers,
   ChevronRight,
   RefreshCw,
+  Info,
+  Gift,
+  Percent,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import LogoWatermark from '../components/common/LogoWatermark';
 import ProductDetailDrawer from '../components/ProductDetailDrawer';
+import { generateTableQrDataUrl } from '../utils/qrCode';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { openThermalReceipt, openOrderSlipReceipt } from '../utils/receipt';
@@ -120,14 +124,14 @@ function ProductCardImage({ foto, nama }) {
 
   if (!foto || error) {
     return (
-      <div className="flex h-20 sm:h-24 w-full items-center justify-center rounded-xl bg-gradient-to-br from-slate-100 to-slate-200/80 text-slate-400">
+      <div className="flex aspect-square sm:aspect-auto sm:h-24 w-full items-center justify-center rounded-xl bg-gradient-to-br from-slate-100 to-slate-200/80 text-slate-400">
         <Package size={24} />
       </div>
     );
   }
 
   return (
-    <div className="h-20 sm:h-24 w-full overflow-hidden rounded-xl bg-slate-100">
+    <div className="aspect-square sm:aspect-auto sm:h-24 w-full overflow-hidden rounded-xl bg-slate-100">
       <img
         src={foto}
         alt={nama}
@@ -155,7 +159,13 @@ function timeAgo(dateString) {
 
 export default function Transaksi() {
   const { currentUserDisplay, cashierOperator } = useAuth();
-  const currentKasirName = currentUserDisplay || 'Kasir';
+  const defaultKasirName = currentUserDisplay || cashierOperator || 'Kasir';
+  const [manualKasirName, setManualKasirName] = useState('');
+  const activeKasirName = manualKasirName.trim() || defaultKasirName;
+
+  // QRIS Simulation States
+  const [qrisQrDataUrl, setQrisQrDataUrl] = useState('');
+  const [isGeneratingQris, setIsGeneratingQris] = useState(false);
 
   const {
     products,
@@ -276,6 +286,7 @@ export default function Transaksi() {
   const [payingOrder, setPayingOrder] = useState(null);
   const [queuePaidAmount, setQueuePaidAmount] = useState('');
   const [queuePayMethod, setQueuePayMethod] = useState('Tunai');
+  const [queueQrisConfirmed, setQueueQrisConfirmed] = useState(false);
 
   const cartRef = useRef(null);
   const searchInputRef = useRef(null);
@@ -292,6 +303,154 @@ export default function Transaksi() {
     }
     return map;
   }, [productMeta]);
+
+  // Helper Perhitungan Seluruh Jenis Promo Produk (Persen, Nominal, B1G1, B2G1, B3G1, B1G2, Gratis Topping)
+  const getItemPromo = (item, meta) => {
+    if (!item) return null;
+    const isPromoActive = Boolean(meta?.promoActive || item.promoActive || item.promo || meta?.b1g1);
+    if (!isPromoActive) return null;
+
+    const today = new Date().toISOString().slice(0, 10);
+    if (meta?.promoStartDate && today < meta.promoStartDate.slice(0, 10)) {
+      return null;
+    }
+    if (meta?.promoEndDate && today > meta.promoEndDate.slice(0, 10)) {
+      return null;
+    }
+
+    const pType = String(meta?.promoType || item.promoType || (meta?.b1g1 ? 'b1g1' : 'nominal')).toLowerCase();
+    const schemeNote = String(meta?.b1g1Note || meta?.promoTitle || '').toLowerCase();
+    const basePrice = Number(item.harga || 0);
+    const totalQty = Number(item.qty || 1);
+
+    // A. Diskon Persentase (%)
+    // Contoh: harga Rp21.000 dengan diskon 2% menghasilkan potongan Rp420, harga akhir Rp20.580
+    if (pType === 'persen') {
+      const val = Number(meta?.promoValue || item.promoValue || item.diskonPersen || 0);
+      if (val > 0) {
+        const discountPerUnit = Math.round((basePrice * val) / 100);
+        const netPricePerUnit = Math.max(0, basePrice - discountPerUnit);
+        const totalDiscount = discountPerUnit * totalQty;
+        return {
+          type: 'persen',
+          label: `Diskon ${val}%`,
+          val,
+          discountPerUnit,
+          netPricePerUnit,
+          totalDiscount,
+          originalTotal: basePrice * totalQty,
+          finalTotal: netPricePerUnit * totalQty,
+        };
+      }
+    }
+
+    // B. Potongan Harga Nominal (Rp)
+    if (pType === 'nominal') {
+      const val = Number(meta?.promoValue || item.promoValue || item.diskon || 0);
+      if (val > 0) {
+        const discountPerUnit = Math.min(basePrice, val);
+        const netPricePerUnit = Math.max(0, basePrice - discountPerUnit);
+        const totalDiscount = discountPerUnit * totalQty;
+        return {
+          type: 'nominal',
+          label: `Potongan ${formatRupiah(val)}`,
+          val,
+          discountPerUnit,
+          netPricePerUnit,
+          totalDiscount,
+          originalTotal: basePrice * totalQty,
+          finalTotal: netPricePerUnit * totalQty,
+        };
+      }
+    }
+
+    // C. Gratis Topping
+    if (pType === 'gratis_topping' || schemeNote.includes('topping')) {
+      const toppingVal = Number(meta?.promoValue) || 3000;
+      const discountPerUnit = Math.min(basePrice, toppingVal);
+      const totalDiscount = discountPerUnit * totalQty;
+      return {
+        type: 'gratis_topping',
+        label: `Gratis Topping (${formatRupiah(toppingVal)})`,
+        val: toppingVal,
+        discountPerUnit,
+        netPricePerUnit: Math.max(0, basePrice - discountPerUnit),
+        totalDiscount,
+        originalTotal: basePrice * totalQty,
+        finalTotal: (basePrice - discountPerUnit) * totalQty,
+      };
+    }
+
+    // D. Beli 2 Gratis 1 (B2G1)
+    if (pType === 'b2g1' || schemeNote.includes('beli 2 gratis 1') || schemeNote.includes('b2g1')) {
+      const freeCount = Math.floor(totalQty / 3);
+      const paidCount = totalQty - freeCount;
+      const totalDiscount = freeCount * basePrice;
+      return {
+        type: 'b2g1',
+        label: `Beli 2 Gratis 1 (${freeCount} gratis)`,
+        freeCount,
+        paidCount,
+        discountPerUnit: 0,
+        totalDiscount,
+        originalTotal: basePrice * totalQty,
+        finalTotal: paidCount * basePrice,
+      };
+    }
+
+    // E. Beli 3 Gratis 1 (B3G1)
+    if (pType === 'b3g1' || schemeNote.includes('beli 3 gratis 1') || schemeNote.includes('b3g1')) {
+      const freeCount = Math.floor(totalQty / 4);
+      const paidCount = totalQty - freeCount;
+      const totalDiscount = freeCount * basePrice;
+      return {
+        type: 'b3g1',
+        label: `Beli 3 Gratis 1 (${freeCount} gratis)`,
+        freeCount,
+        paidCount,
+        discountPerUnit: 0,
+        totalDiscount,
+        originalTotal: basePrice * totalQty,
+        finalTotal: paidCount * basePrice,
+      };
+    }
+
+    // F. Beli 1 Gratis 2 (B1G2)
+    if (pType === 'b1g2' || schemeNote.includes('beli 1 gratis 2') || schemeNote.includes('b1g2')) {
+      const freeCount = Math.floor(totalQty / 3) * 2;
+      const paidCount = totalQty - freeCount;
+      const totalDiscount = freeCount * basePrice;
+      return {
+        type: 'b1g2',
+        label: `Beli 1 Gratis 2 (${freeCount} gratis)`,
+        freeCount,
+        paidCount,
+        discountPerUnit: 0,
+        totalDiscount,
+        originalTotal: basePrice * totalQty,
+        finalTotal: paidCount * basePrice,
+      };
+    }
+
+    // G. Beli 1 Gratis 1 (B1G1)
+    if (pType === 'b1g1' || meta?.b1g1 || schemeNote.includes('beli 1 gratis 1') || schemeNote.includes('b1g1')) {
+      const freeCount = Math.floor(totalQty / 2);
+      const paidCount = totalQty - freeCount;
+      const totalDiscount = freeCount * basePrice;
+      return {
+        type: 'b1g1',
+        label: `Beli 1 Gratis 1 (${freeCount} gratis)`,
+        freeCount,
+        paidCount,
+        discountPerUnit: 0,
+        totalDiscount,
+        originalTotal: basePrice * totalQty,
+        finalTotal: paidCount * basePrice,
+      };
+    }
+
+    return null;
+  };
 
   const activeTables = useMemo(() => {
     return (tables || []).filter((t) => t.active !== false);
@@ -337,6 +496,12 @@ export default function Transaksi() {
 
     const filteredGroups = ALL_PAYMENT_GROUPS.map((group) => {
       const activeMethods = group.methods.filter((m) => {
+        // Hilangkan Tunai, QRIS, dan Kartu Debit/Kredit pada transaksi Delivery
+        if (orderType === 'delivery') {
+          if (m.id === 'Tunai' || m.id === 'QRIS' || m.id === 'Kartu Debit' || m.id === 'Kartu Kredit') {
+            return false;
+          }
+        }
         if (pm[m.id] !== undefined) return Boolean(pm[m.id]);
         if (pm[group.id] !== undefined) return Boolean(pm[group.id]);
         return true;
@@ -346,21 +511,14 @@ export default function Transaksi() {
         ...group,
         methods: activeMethods,
       };
-    }).filter((group) => group.methods.length > 0);
+    }).filter((group) => {
+      if (group.methods.length === 0) return false;
+      // Khusus Delivery, jangan tampilkan grup Tunai, QRIS, atau Kartu sama sekali
+      if (orderType === 'delivery' && (group.id === 'Tunai' || group.id === 'QRIS' || group.id === 'Kartu')) return false;
+      return true;
+    });
 
-    // COD for delivery
-    if (orderType === 'delivery') {
-      return [
-        {
-          id: 'COD',
-          label: 'COD (Bayar di Tempat)',
-          icon: Banknote,
-          methods: [{ id: 'COD', label: 'COD (Bayar di Tempat)', icon: Banknote }],
-        },
-        ...filteredGroups,
-      ];
-    }
-
+    // Pada Delivery HANYA diperbolehkan metode digital / transfer bank (Tidak ada Tunai / COD)
     return filteredGroups;
   }, [orderType, paymentMethods]);
 
@@ -434,6 +592,45 @@ export default function Transaksi() {
     setTimeout(() => setPressedProductId(null), 200);
     setTimeout(() => setCartPulse(false), 350);
 
+    const meta = metaMap[product.id];
+    const today = new Date().toISOString().slice(0, 10);
+    const isPromoValid =
+      meta?.promoActive &&
+      (!meta?.promoStartDate || today >= meta.promoStartDate.slice(0, 10)) &&
+      (!meta?.promoEndDate || today <= meta.promoEndDate.slice(0, 10));
+
+    let initialQty = 1;
+    let promoToast = null;
+
+    if (isPromoValid) {
+      const pType = String(meta?.promoType || (meta?.b1g1 ? 'b1g1' : '')).toLowerCase();
+      const schemeNote = String(meta?.b1g1Note || meta?.promoTitle || '').toLowerCase();
+      const stock = Number(product.stok || 0);
+
+      if ((pType === 'b3g1' || schemeNote.includes('beli 3 gratis 1') || schemeNote.includes('b3g1')) && stock >= 4) {
+        initialQty = 4;
+        promoToast = 'Promo Beli 3 Gratis 1: 4 item ditambahkan ke keranjang (1 gratis)!';
+      } else if (
+        (pType === 'b2g1' || schemeNote.includes('beli 2 gratis 1') || schemeNote.includes('b2g1')) &&
+        stock >= 3
+      ) {
+        initialQty = 3;
+        promoToast = 'Promo Beli 2 Gratis 1: 3 item ditambahkan ke keranjang (1 gratis)!';
+      } else if (
+        (pType === 'b1g2' || schemeNote.includes('beli 1 gratis 2') || schemeNote.includes('b1g2')) &&
+        stock >= 3
+      ) {
+        initialQty = 3;
+        promoToast = 'Promo Beli 1 Gratis 2: 3 item ditambahkan ke keranjang (2 gratis)!';
+      } else if (
+        (pType === 'b1g1' || meta?.b1g1 || schemeNote.includes('beli 1 gratis 1') || schemeNote.includes('b1g1')) &&
+        stock >= 2
+      ) {
+        initialQty = 2;
+        promoToast = 'Promo Beli 1 Gratis 1: 2 item ditambahkan ke keranjang (1 gratis)!';
+      }
+    }
+
     setCart((prev) => {
       const existing = prev.find((i) => i.id === product.id);
 
@@ -447,11 +644,15 @@ export default function Transaksi() {
         );
       }
 
+      if (promoToast) {
+        showToast(promoToast);
+      }
+
       return [
         ...prev,
         {
           ...product,
-          qty: 1,
+          qty: initialQty,
           notes: '',
           pajakAktif: Boolean(product.pajakAktif),
           pajakJenis: product.pajakJenis || 'PPN',
@@ -508,31 +709,44 @@ export default function Transaksi() {
   };
 
   // =========================================================
-  // CALCULATION (Dual Tax & Biaya Pengiriman)
+  // CALCULATION (Dual Tax, Promo Engine & Biaya Pengiriman)
   // =========================================================
 
-  const subtotal = cart.reduce(
+  // Gross Subtotal (Harga Katalog Awal)
+  const grossSubtotal = cart.reduce(
     (sum, item) => sum + Number(item.harga || 0) * Number(item.qty || 0),
     0
   );
 
-  const totalQuantity = cart.reduce((sum, item) => sum + Number(item.qty || 0), 0);
-  const discountValue = Number(discount) || 0;
+  // Total Potongan Seluruh Jenis Promo Produk (Persen, B1G1, Nominal)
+  const totalItemPromoDiscount = cart.reduce((sum, item) => {
+    const promo = getItemPromo(item, metaMap[item.id]);
+    return sum + (promo?.totalDiscount || 0);
+  }, 0);
 
-  // 1. Pajak Barang (per produk yang kena pajak)
+  // Subtotal Netto setelah Promo
+  const netSubtotal = Math.max(0, grossSubtotal - totalItemPromoDiscount);
+  const subtotal = netSubtotal; // Kompatibilitas variabel struk & transaksi
+
+  const totalQuantity = cart.reduce((sum, item) => sum + Number(item.qty || 0), 0);
+  const discountValue = Number(discount) || 0; // Diskon Tambahan Kasir (Voucher Manual)
+
+  // 1. Pajak Barang (per produk kena pajak, dihitung dari harga net setelah promo)
   const totalPajakBarang = cart.reduce((sum, item) => {
     if (item.pajakAktif && Number(item.pajakPersen) > 0) {
-      const itemSub = Number(item.harga || 0) * Number(item.qty || 0);
-      const tax = Math.round((itemSub * Number(item.pajakPersen)) / 100);
+      const promo = getItemPromo(item, metaMap[item.id]);
+      const itemNet = promo ? promo.finalTotal : Number(item.harga || 0) * Number(item.qty || 0);
+      const tax = Math.round((itemNet * Number(item.pajakPersen)) / 100);
       return sum + tax;
     }
     return sum;
   }, 0);
 
-  // 2. Pajak Transaksi (Perlindungan Anti Pajak Ganda)
+  // 2. Pajak Transaksi (Perlindungan Anti Pajak Ganda, basis DPP setelah promo & diskon)
   const nonPajakBarangSubtotal = cart.reduce((sum, item) => {
     if (!item.pajakAktif || !item.pajakPersen) {
-      return sum + Number(item.harga || 0) * Number(item.qty || 0);
+      const promo = getItemPromo(item, metaMap[item.id]);
+      return sum + (promo ? promo.finalTotal : Number(item.harga || 0) * Number(item.qty || 0));
     }
     return sum;
   }, 0);
@@ -548,7 +762,7 @@ export default function Transaksi() {
 
   const total = Math.max(
     0,
-    subtotal - discountValue + totalPajak + shippingCost
+    netSubtotal - discountValue + totalPajak + shippingCost
   );
 
   const paidValue = Number(paid) || 0;
@@ -623,8 +837,9 @@ export default function Transaksi() {
       setDeliveryModalError('Nama penerima wajib diisi.');
       return;
     }
-    if (!deliveryPhone.trim()) {
-      setDeliveryModalError('Nomor HP/WhatsApp penerima wajib diisi.');
+    const cleanPhone = deliveryPhone.replace(/\D/g, '');
+    if (!cleanPhone || cleanPhone.length < 9) {
+      setDeliveryModalError('Nomor HP/WhatsApp hanya boleh berisi angka (minimal 9 digit).');
       return;
     }
     if (!deliveryAddress.trim()) {
@@ -655,9 +870,10 @@ export default function Transaksi() {
     }
 
     if (orderType === 'delivery') {
-      if (!deliveryName.trim() || !deliveryPhone.trim() || !deliveryAddress.trim()) {
+      const cleanPhone = deliveryPhone.replace(/\D/g, '');
+      if (!deliveryName.trim() || !cleanPhone || cleanPhone.length < 9 || !deliveryAddress.trim()) {
         setShowDeliveryModal(true);
-        setValidationError('Lengkapi data pengiriman delivery terlebih dahulu.');
+        setValidationError('Lengkapi data pengiriman delivery (nama, nomor HP angka valid min. 9 digit, alamat).');
         return;
       }
     }
@@ -668,7 +884,7 @@ export default function Transaksi() {
     }
 
     if (isDirectPayment && paymentCategory === 'Digital' && !isDigitalConfirmed) {
-      setValidationError('Harap verifikasi konfirmasi pembayaran digital terlebih dahulu.');
+      setValidationError('Harap konfirmasi verifikasi pembayaran digital / QRIS / Debit terlebih dahulu.');
       return;
     }
 
@@ -688,13 +904,14 @@ export default function Transaksi() {
       const created = createUnifiedOrder({
         orderType,
         source: 'pos_cashier',
+        cashierName: activeKasirName,
         tableId: orderType === 'dine_in' ? selectedTable : null,
         customerName: guestName,
-        customerPhone: orderType === 'delivery' ? deliveryPhone.trim() : customerPhone.trim(),
+        customerPhone: orderType === 'delivery' ? deliveryPhone.replace(/\D/g, '').trim() : customerPhone.replace(/\D/g, '').trim(),
         deliveryAddress: orderType === 'delivery' ? deliveryAddress.trim() : null,
         deliveryAddressNote: orderType === 'delivery' ? deliveryAddressNote.trim() : null,
         deliveryCourier: orderType === 'delivery' ? deliveryCourier : null,
-        deliveryCourierPhone: orderType === 'delivery' ? deliveryCourierPhone.trim() : null,
+        deliveryCourierPhone: orderType === 'delivery' ? deliveryCourierPhone.replace(/\D/g, '').trim() : null,
         shippingCost,
         pickupCode: orderType === 'pickup' ? pickupCode : null,
         pickupTime: orderType === 'pickup' ? pickupTime : null,
@@ -708,7 +925,7 @@ export default function Transaksi() {
           pajakJenis: it.pajakJenis,
           pajakPersen: it.pajakPersen,
         })),
-        discount: discountValue,
+        discount: discountValue + totalItemPromoDiscount,
         tax: totalPajak,
         paymentStatus: paymentStat,
         paymentMethod: payMeth,
@@ -731,7 +948,8 @@ export default function Transaksi() {
           orderId: created.id,
           orderNumber: created.orderNumber,
           tanggal: tanggalStr,
-          kasir: currentKasirName,
+          kasir: activeKasirName,
+          cashierName: activeKasirName,
           customer: guestName,
           items: cart.map((item) => ({
             id: item.id,
@@ -743,8 +961,11 @@ export default function Transaksi() {
             pajakJenis: item.pajakJenis || 'PPN',
             pajakPersen: item.pajakPersen || 0,
           })),
-          subtotal,
-          discount: discountValue,
+          subtotal: grossSubtotal,
+          grossSubtotal,
+          netSubtotal,
+          promoDiscount: totalItemPromoDiscount,
+          discount: discountValue + totalItemPromoDiscount,
           pajakBarang: totalPajakBarang,
           pajakTransaksi: totalPajakTransaksi,
           pajakTransaksiPersen: isPajakTransaksiActive ? Number(pajakTransaksiPersen) || 0 : 0,
@@ -859,73 +1080,75 @@ export default function Transaksi() {
   const handleOpenPayQueueOrder = (order) => {
     setPayingOrder(order);
     setQueuePaidAmount(String(order.total || ''));
-    setQueuePayMethod('Tunai');
+    setQueuePayMethod(order.orderType === 'delivery' ? 'GoPay' : 'Tunai');
+    setQueueQrisConfirmed(false);
   };
 
   const handleConfirmPayQueueOrder = () => {
     if (!payingOrder) return;
     const paidNum = Number(queuePaidAmount) || payingOrder.total;
 
-    // Jika Dine In dan memiliki Sesi Meja, tutup sesi meja
-    if (payingOrder.orderType === 'dine_in' && payingOrder.sessionId) {
-      const finalTrx = closeTableSession(payingOrder.sessionId, {
-        paymentMethod: queuePayMethod,
-        paymentCategory: queuePayMethod === 'Tunai' ? 'Tunai' : 'Digital',
-        paid: paidNum,
-        change: Math.max(0, paidNum - payingOrder.total),
-        kasir: currentKasirName,
-      });
-      if (finalTrx) {
-        setLastTransaction(finalTrx);
-        setShowReceipt(true);
-      }
-    } else {
-      updateOrderProcessingStatus(payingOrder.id, {
-        paymentStatus: 'paid',
-        paymentMethod: queuePayMethod,
-      });
-
-      const now = new Date();
-      const pad = (n) => String(n).padStart(2, '0');
-      const tanggalStr =
-        `${now.getFullYear()}-` +
-        `${pad(now.getMonth() + 1)}-` +
-        `${pad(now.getDate())} ` +
-        `${pad(now.getHours())}:` +
-        `${pad(now.getMinutes())}`;
-
-      const trx = {
-        id: `TRX-${Date.now().toString().slice(-8)}`,
-        orderId: payingOrder.id,
-        orderNumber: payingOrder.orderNumber,
-        tanggal: tanggalStr,
-        kasir: currentKasirName,
-        customer: payingOrder.customerName || 'Umum',
-        items: payingOrder.items || [],
-        subtotal: payingOrder.subtotal,
-        discount: payingOrder.discount || 0,
-        tax: payingOrder.tax || 0,
-        totalPajak: payingOrder.tax || 0,
-        shippingCost: payingOrder.shippingCost || 0,
-        total: payingOrder.total,
-        paid: paidNum,
-        change: Math.max(0, paidNum - payingOrder.total),
-        paymentMethod: queuePayMethod,
-        metode: queuePayMethod,
-        paymentStatus: 'Lunas',
-        status: 'Selesai',
-        orderType: payingOrder.orderType,
-        tableId: payingOrder.tableId,
-        tableName: payingOrder.tableName,
-        pickupCode: payingOrder.pickupCode,
-      };
-
-      completeTransaction(trx);
-      setLastTransaction(trx);
-      setShowReceipt(true);
+    // Validasi Pembayaran Tunai
+    if (queuePayMethod === 'Tunai' && paidNum < payingOrder.total) {
+      showToast('Uang pembayaran tunai kurang dari total tagihan!', 'error');
+      return;
     }
 
+    // Validasi Pembayaran QRIS
+    if (queuePayMethod === 'QRIS' && !queueQrisConfirmed) {
+      showToast('Harap lakukan konfirmasi simulasi pembayaran QRIS terlebih dahulu.', 'error');
+      return;
+    }
+
+    // Update status order menjadi paid. JANGAN menutup sesi meja!
+    updateOrderProcessingStatus(payingOrder.id, {
+      paymentStatus: 'paid',
+      paymentMethod: queuePayMethod,
+      cashierName: activeKasirName,
+    });
+
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const tanggalStr =
+      `${now.getFullYear()}-` +
+      `${pad(now.getMonth() + 1)}-` +
+      `${pad(now.getDate())} ` +
+      `${pad(now.getHours())}:` +
+      `${pad(now.getMinutes())}`;
+
+    const trx = {
+      id: `TRX-${Date.now().toString().slice(-8)}`,
+      orderId: payingOrder.id,
+      orderNumber: payingOrder.orderNumber,
+      tanggal: tanggalStr,
+      kasir: activeKasirName,
+      cashierName: activeKasirName,
+      customer: payingOrder.customerName || 'Umum',
+      items: payingOrder.items || [],
+      subtotal: payingOrder.subtotal,
+      discount: payingOrder.discount || 0,
+      tax: payingOrder.tax || 0,
+      totalPajak: payingOrder.tax || 0,
+      shippingCost: payingOrder.shippingCost || 0,
+      total: payingOrder.total,
+      paid: paidNum,
+      change: Math.max(0, paidNum - payingOrder.total),
+      paymentMethod: queuePayMethod,
+      metode: queuePayMethod,
+      paymentStatus: 'Lunas',
+      status: 'Selesai',
+      orderType: payingOrder.orderType,
+      tableId: payingOrder.tableId,
+      tableName: payingOrder.tableName,
+      sessionId: payingOrder.sessionId,
+      pickupCode: payingOrder.pickupCode,
+    };
+
+    completeTransaction(trx);
+    setLastTransaction(trx);
+    setShowReceipt(true);
     setPayingOrder(null);
+    setQueueQrisConfirmed(false);
     showToast('Pembayaran berhasil diselesaikan');
   };
 
@@ -1117,15 +1340,33 @@ export default function Transaksi() {
                     >
                       <div className="relative">
                         <ProductCardImage foto={product.foto} nama={product.nama} />
+
+                        {/* Tombol Info Barang Langsung di POS */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDetailProduct(product);
+                          }}
+                          className="absolute right-1.5 top-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-lg bg-white/90 text-slate-500 shadow-2xs hover:bg-emerald-600 hover:text-white transition"
+                          title="Lihat Detail & Promo Barang"
+                        >
+                          <Info size={13} />
+                        </button>
+
                         <div className="absolute left-1.5 top-1.5 flex flex-col gap-1">
                           {meta?.bestSeller && (
                             <span className="rounded-md bg-amber-500/95 backdrop-blur-xs px-1.5 py-0.5 text-[9px] font-black text-white shadow-xs">
                               BEST SELLER
                             </span>
                           )}
-                          {product.promo && (
+                          {(meta?.promoActive || product.promo) && (
                             <span className="rounded-md bg-rose-600/95 backdrop-blur-xs px-1.5 py-0.5 text-[9px] font-black text-white shadow-xs">
-                              PROMO
+                              {meta?.promoType === 'b1g1' || meta?.b1g1
+                                ? 'B1G1'
+                                : meta?.promoType === 'persen'
+                                ? `-${meta?.promoValue}%`
+                                : 'PROMO'}
                             </span>
                           )}
                         </div>
@@ -1141,31 +1382,85 @@ export default function Transaksi() {
                           </p>
                         </div>
 
-                        <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between">
-                          <span className="text-xs font-black text-emerald-700">
-                            {formatRupiah(product.harga)}
-                          </span>
-                          <span
-                            className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${
+                        <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center justify-between gap-1.5">
+                          <div className="min-w-0">
+                            <span className="text-xs font-black text-emerald-700 block truncate">
+                              {formatRupiah(product.harga)}
+                            </span>
+                            <span
+                              className={`inline-block text-[9.5px] font-bold px-1.5 py-0.2 rounded ${
+                                isOutOfStock
+                                  ? 'bg-rose-100 text-rose-700'
+                                  : isLowStock
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : 'bg-slate-100 text-slate-600'
+                              }`}
+                            >
+                              {isOutOfStock ? 'Habis' : `${stokVal} ${product.satuan || 'pcs'}`}
+                            </span>
+                          </div>
+
+                          {/* Tombol Tambah Keranjang Sentuh Nyaman Khusus Smartphone */}
+                          <button
+                            type="button"
+                            disabled={isOutOfStock}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              addToCart(product);
+                            }}
+                            className={`flex items-center justify-center gap-1 min-h-[38px] min-w-[38px] px-2.5 py-1.5 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer active:scale-95 shrink-0 ${
                               isOutOfStock
-                                ? 'bg-rose-100 text-rose-700'
-                                : isLowStock
-                                ? 'bg-amber-100 text-amber-800'
-                                : 'bg-slate-100 text-slate-600'
+                                ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20'
                             }`}
+                            title="Tambah ke Keranjang"
                           >
-                            {isOutOfStock ? 'Habis' : `${stokVal} ${product.satuan || 'pcs'}`}
-                          </span>
+                            <Plus size={15} />
+                            <span className="hidden sm:inline">Tambah</span>
+                          </button>
                         </div>
                       </div>
                     </div>
                   );
                 })}
               </div>
+
+              {/* Floating Mobile Cart Bar (Hanya tampil di mobile ketika keranjang terisi) */}
+              {cart.length > 0 && (
+                <div className="fixed bottom-18 inset-x-3 z-30 lg:hidden animate-in slide-in-from-bottom duration-300 no-print">
+                  <div className="bg-slate-900/95 backdrop-blur-md text-white p-3 rounded-2xl shadow-2xl flex items-center justify-between border border-slate-800">
+                    <div className="flex items-center gap-2.5">
+                      <div className="relative flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600 text-white shrink-0">
+                        <ShoppingCart size={18} />
+                        <span className="absolute -top-1 -right-1 flex h-4 min-w-4 px-1 items-center justify-center rounded-full bg-rose-500 text-[10px] font-black text-white">
+                          {totalQuantity}
+                        </span>
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-[10px] text-slate-400 block font-medium truncate">{cart.length} Produk Dipilih</span>
+                        <span className="text-sm font-black text-white">{formatRupiah(total)}</span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const cartEl = document.getElementById('pos-cart-container');
+                        if (cartEl) {
+                          cartEl.scrollIntoView({ behavior: 'smooth' });
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-950 px-3.5 py-2 rounded-xl text-xs font-extrabold transition shadow-md shadow-emerald-500/20 cursor-pointer shrink-0"
+                    >
+                      <span>Lihat &amp; Bayar</span>
+                      <ArrowRight size={14} />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* RIGHT COLUMN: CART & UNIFIED CHECKOUT (5 of 12 cols desktop) */}
-            <div className="lg:col-span-5 xl:col-span-5 2xl:col-span-5 lg:sticky lg:top-4 lg:h-[calc(100vh-2rem)] flex flex-col rounded-2xl border border-slate-200 bg-white shadow-xs overflow-hidden">
+            <div id="pos-cart-container" className="lg:col-span-5 xl:col-span-5 2xl:col-span-5 lg:sticky lg:top-4 lg:h-[calc(100vh-2rem)] flex flex-col rounded-2xl border border-slate-200 bg-white shadow-xs overflow-hidden">
               <LogoWatermark size="sm" />
 
               {/* FIXED CART HEADER */}
@@ -1226,9 +1521,43 @@ export default function Transaksi() {
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div className="flex-1 min-w-0">
-                              <h4 className="text-xs font-bold text-slate-800 break-words leading-snug">
-                                {item.nama}
-                              </h4>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <h4 className="text-xs font-bold text-slate-800 break-words leading-snug">
+                                  {item.nama}
+                                </h4>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const prod = products.find((p) => p.id === item.id) || item;
+                                    setDetailProduct(prod);
+                                  }}
+                                  className="p-0.5 text-slate-400 hover:text-emerald-700 transition"
+                                  title="Lihat info & promo barang"
+                                >
+                                  <Info size={12} />
+                                </button>
+                              </div>
+
+                              {/* Promo Detail Breakdown */}
+                              {(() => {
+                                const promo = getItemPromo(item, metaMap[item.id]);
+                                if (!promo) return null;
+                                return (
+                                  <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                    <span className="inline-flex items-center gap-1 rounded bg-rose-50 px-1.5 py-0.5 text-[9.5px] font-bold text-rose-700 border border-rose-200">
+                                      <Percent size={10} />
+                                      {promo.label}
+                                    </span>
+                                    <span className="text-[10px] text-slate-400 line-through">
+                                      {formatRupiah(promo.originalTotal)}
+                                    </span>
+                                    <span className="text-[10px] font-bold text-rose-600">
+                                      -{formatRupiah(promo.totalDiscount)}
+                                    </span>
+                                  </div>
+                                );
+                              })()}
+
                               {item.notes ? (
                                 <p className="text-[10px] font-medium text-emerald-800 bg-emerald-100/70 px-1.5 py-0.5 rounded mt-0.5 inline-block">
                                   Catatan: {item.notes}
@@ -1289,8 +1618,27 @@ export default function Transaksi() {
                               </button>
                             </div>
 
-                            <div className="text-right font-black text-xs text-slate-800 min-w-[70px]">
-                              {formatRupiah(item.harga * item.qty)}
+                            <div className="text-right min-w-[70px]">
+                              {(() => {
+                                const promo = getItemPromo(item, metaMap[item.id]);
+                                if (promo) {
+                                  return (
+                                    <div>
+                                      <span className="text-[10px] text-slate-400 line-through block">
+                                        {formatRupiah(promo.originalTotal)}
+                                      </span>
+                                      <span className="font-black text-xs text-emerald-700">
+                                        {formatRupiah(promo.finalTotal)}
+                                      </span>
+                                    </div>
+                                  );
+                                }
+                                return (
+                                  <span className="font-black text-xs text-slate-800">
+                                    {formatRupiah(item.harga * item.qty)}
+                                  </span>
+                                );
+                              })()}
                             </div>
                           </div>
                         </motion.div>
@@ -1302,6 +1650,24 @@ export default function Transaksi() {
 
               {/* ORDER TYPE, PAYMENT, SUMMARY & FIXED CHECKOUT */}
               <div className="relative z-10 shrink-0 max-h-[52vh] overflow-y-auto border-t border-slate-200 bg-white px-4 py-3 space-y-3">
+                {/* IDENTITAS KASIR PENERIMA PESANAN (Dapat Diisi & Diedit Manual) */}
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-2.5 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                      <User size={13} className="text-emerald-600" />
+                      <span>Kasir Penerima Pesanan:</span>
+                    </label>
+                    <span className="text-[10px] text-slate-400 font-semibold">(Manual / Otomatis)</span>
+                  </div>
+                  <input
+                    type="text"
+                    value={manualKasirName}
+                    onChange={(e) => setManualKasirName(e.target.value)}
+                    placeholder={defaultKasirName}
+                    className="w-full rounded-xl border border-slate-200 bg-white py-1.5 px-3 text-xs font-bold text-slate-800 outline-none focus:border-emerald-500"
+                  />
+                </div>
+
                 {/* 3 Unified Order Types: Dine In, Delivery, Pickup */}
                 <div>
                   <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">
@@ -1520,8 +1886,8 @@ export default function Transaksi() {
                       <input
                         type="tel"
                         value={customerPhone}
-                        onChange={(e) => setCustomerPhone(e.target.value)}
-                        placeholder="No. HP / WA (opsional)"
+                        onChange={(e) => setCustomerPhone(e.target.value.replace(/\D/g, ''))}
+                        placeholder="No. HP / WA (hanya angka)"
                         className="rounded-lg border border-slate-200 bg-white py-1.5 px-2 text-xs outline-none focus:border-emerald-500"
                       />
                     </div>
@@ -1603,15 +1969,146 @@ export default function Transaksi() {
                     );
                   })()}
 
-                  {/* Digital Confirmation Checkbox */}
-                  {!isCashPayment && paymentMethod !== 'COD' && (
+                  {/* QRIS SIMULASI (Scannable QR + Konfirmasi Pembayaran) */}
+                  {paymentMethod === 'QRIS' && (
+                    <div className="rounded-2xl border border-emerald-300 bg-emerald-50/70 p-3 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <QrCode size={16} className="text-emerald-700" />
+                          <span className="text-xs font-black text-emerald-950">QRIS Kasir (Simulasi Operasional)</span>
+                        </div>
+                        <span
+                          className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                            isDigitalConfirmed
+                              ? 'bg-emerald-600 text-white'
+                              : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          {isDigitalConfirmed ? 'LUNAS (TERKONFIRMASI)' : 'MENUNGGU PEMBAYARAN'}
+                        </span>
+                      </div>
+
+                      {/* Tampilan QR Code Scannable */}
+                      <div className="flex flex-col items-center justify-center p-3 bg-white rounded-xl border border-emerald-200">
+                        {isGeneratingQris ? (
+                          <div className="h-32 w-32 flex flex-col items-center justify-center text-slate-400 gap-1.5">
+                            <RefreshCw size={20} className="animate-spin text-emerald-600" />
+                            <span className="text-[10px] font-bold">Membuat QRIS...</span>
+                          </div>
+                        ) : qrisQrDataUrl ? (
+                          <div className="space-y-1.5 text-center">
+                            <img
+                              src={qrisQrDataUrl}
+                              alt="QRIS Simulasi"
+                              className="h-32 w-32 object-contain mx-auto rounded-lg border border-slate-100 shadow-2xs"
+                            />
+                            <p className="text-[9.5px] font-bold text-slate-500 uppercase tracking-wider">
+                              NMID: ID1020000000001 • {storeProfile?.nama || 'Qurmacel POS'}
+                            </p>
+                            <p className="text-xs font-black text-emerald-700">
+                              Tagihan: {formatRupiah(total)}
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="h-32 w-32 flex items-center justify-center text-slate-300">
+                            <QrCode size={36} />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Tombol Konfirmasi Pembayaran QRIS */}
+                      {isDigitalConfirmed ? (
+                        <div className="flex items-center justify-between rounded-xl bg-emerald-100 p-2 text-xs font-bold text-emerald-900 border border-emerald-300">
+                          <div className="flex items-center gap-1.5">
+                            <CheckCircle2 size={15} className="text-emerald-700" />
+                            <span>Pembayaran QRIS Berhasil Dikonfirmasi</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setIsDigitalConfirmed(false)}
+                            className="text-[10px] underline text-emerald-700 hover:text-emerald-900"
+                          >
+                            Ubah
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsDigitalConfirmed(true);
+                            showToast('Pembayaran QRIS berhasil dikonfirmasi (Simulasi Lunas)');
+                          }}
+                          className="w-full py-2.5 rounded-xl bg-emerald-600 text-white font-bold text-xs shadow-md shadow-emerald-600/30 hover:bg-emerald-500 transition active:scale-98 flex items-center justify-center gap-1.5"
+                        >
+                          <CheckCircle size={14} />
+                          <span>Konfirmasi Pembayaran (Simulasi Lunas)</span>
+                        </button>
+                      )}
+
+                      <p className="text-[9.5px] text-slate-400 text-center leading-tight">
+                        * Simulasi operasional kasir untuk mencatat status transaksi lunas tanpa transfer uang sungguhan.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* KARTU DEBIT (Konfirmasi Manual Kasir) */}
+                  {paymentMethod === 'Kartu Debit' && (
+                    <div className="rounded-2xl border border-indigo-200 bg-indigo-50/70 p-3 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <CreditCard size={16} className="text-indigo-700" />
+                          <span className="text-xs font-black text-indigo-950">Kartu Debit (Mesin EDC)</span>
+                        </div>
+                        <span
+                          className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                            isDigitalConfirmed
+                              ? 'bg-indigo-600 text-white'
+                              : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          {isDigitalConfirmed ? 'LUNAS (EDC BERHASIL)' : 'MENUNGGU VERIFIKASI EDC'}
+                        </span>
+                      </div>
+
+                      {isDigitalConfirmed ? (
+                        <div className="flex items-center justify-between rounded-xl bg-indigo-100 p-2 text-xs font-bold text-indigo-900 border border-indigo-300">
+                          <div className="flex items-center gap-1.5">
+                            <CheckCircle2 size={15} className="text-indigo-700" />
+                            <span>Transaksi Kartu Debit Dikonfirmasi Kasir</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setIsDigitalConfirmed(false)}
+                            className="text-[10px] underline text-indigo-700 hover:text-indigo-900"
+                          >
+                            Ubah
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsDigitalConfirmed(true);
+                            showToast('Transaksi Kartu Debit dikonfirmasi kasir (Lunas)');
+                          }}
+                          className="w-full py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-xs shadow-md shadow-indigo-600/30 hover:bg-indigo-500 transition active:scale-98 flex items-center justify-center gap-1.5"
+                        >
+                          <CreditCard size={14} />
+                          <span>Konfirmasi Pembayaran Mesin EDC Berhasil</span>
+                        </button>
+                      )}
+
+                      <p className="text-[9.5px] text-slate-400 text-center leading-tight">
+                        * Kasir memastikan struk mesin EDC telah keluar sebelum mengonfirmasi lunas.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* DOMPET DIGITAL / TRANSFER BANK (Konfirmasi Lainnya) */}
+                  {!isCashPayment && paymentMethod !== 'COD' && paymentMethod !== 'QRIS' && paymentMethod !== 'Kartu Debit' && (
                     <div className="rounded-xl bg-slate-50 p-2.5 border border-slate-200 space-y-1.5">
                       <div className="flex items-start gap-2 text-[11px] text-slate-600">
-                        {paymentCategory === 'QRIS' ? (
-                          <QrCode size={16} className="text-emerald-600 shrink-0 mt-0.5" />
-                        ) : (
-                          <Clock size={16} className="text-amber-600 shrink-0 mt-0.5" />
-                        )}
+                        <Clock size={16} className="text-amber-600 shrink-0 mt-0.5" />
                         <div>
                           <p className="font-bold text-slate-800">Verifikasi {paymentMethod}</p>
                           <p className="text-[10px] text-slate-500">
@@ -1674,12 +2171,29 @@ export default function Transaksi() {
                 {/* RINGKASAN PEMBAYARAN */}
                 <div className="space-y-1.5 pt-2 border-t border-dashed border-slate-200 text-xs">
                   <div className="flex justify-between text-slate-600">
-                    <span>Subtotal:</span>
-                    <span className="font-semibold text-slate-800">{formatRupiah(subtotal)}</span>
+                    <span>Subtotal Awal (Katalog):</span>
+                    <span className="font-semibold text-slate-800">{formatRupiah(grossSubtotal)}</span>
                   </div>
 
+                  {totalItemPromoDiscount > 0 && (
+                    <div className="flex justify-between text-rose-700 bg-rose-50 px-2 py-1 rounded-lg font-bold">
+                      <span className="flex items-center gap-1">
+                        <Gift size={12} />
+                        <span>Potongan Promo Produk:</span>
+                      </span>
+                      <span>-{formatRupiah(totalItemPromoDiscount)}</span>
+                    </div>
+                  )}
+
+                  {totalItemPromoDiscount > 0 && (
+                    <div className="flex justify-between text-slate-600">
+                      <span>Subtotal Setelah Promo:</span>
+                      <span className="font-semibold text-slate-800">{formatRupiah(netSubtotal)}</span>
+                    </div>
+                  )}
+
                   <div className="flex items-center justify-between gap-2 text-slate-600">
-                    <span>Diskon:</span>
+                    <span>Diskon Tambahan Kasir:</span>
                     <div className="flex items-center gap-1">
                       <span className="text-slate-400">-</span>
                       <input
@@ -1929,11 +2443,13 @@ export default function Transaksi() {
                               </span>
                             </div>
 
-                            <p className="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
+                            <p className="text-[11px] text-slate-400 mt-1 flex items-center gap-1 flex-wrap">
                               <Clock size={11} />
                               <span>{timeAgo(order.createdAt)}</span>
                               <span>·</span>
                               <span>{order.customerName || 'Umum'}</span>
+                              <span>·</span>
+                              <span className="text-slate-600 font-semibold">Kasir: {order.cashierName || order.kasir || 'Kasir'}</span>
                             </p>
                           </div>
 
@@ -2288,19 +2804,63 @@ export default function Transaksi() {
                 </label>
                 <select
                   value={queuePayMethod}
-                  onChange={(e) => setQueuePayMethod(e.target.value)}
+                  onChange={(e) => {
+                    setQueuePayMethod(e.target.value);
+                    setQueueQrisConfirmed(false);
+                  }}
                   className="w-full rounded-xl border border-slate-200 bg-white py-2 px-3 text-xs outline-none focus:border-emerald-500 font-semibold"
                 >
-                  <option value="Tunai">Tunai</option>
-                  <option value="QRIS">QRIS</option>
-                  <option value="GoPay">GoPay</option>
-                  <option value="OVO">OVO</option>
-                  <option value="DANA">DANA</option>
-                  <option value="ShopeePay">ShopeePay</option>
-                  <option value="Transfer Bank">Transfer Bank</option>
-                  <option value="Kartu Debit">Kartu Debit</option>
+                  {payingOrder.orderType === 'delivery' ? (
+                    <>
+                      <option value="GoPay">GoPay</option>
+                      <option value="OVO">OVO</option>
+                      <option value="DANA">DANA</option>
+                      <option value="ShopeePay">ShopeePay</option>
+                      <option value="Transfer Bank">Transfer Bank</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="Tunai">Tunai</option>
+                      <option value="QRIS">QRIS</option>
+                      <option value="GoPay">GoPay</option>
+                      <option value="OVO">OVO</option>
+                      <option value="DANA">DANA</option>
+                      <option value="ShopeePay">ShopeePay</option>
+                      <option value="Transfer Bank">Transfer Bank</option>
+                      <option value="Kartu Debit">Kartu Debit</option>
+                    </>
+                  )}
                 </select>
+                {payingOrder.orderType === 'delivery' && (
+                  <p className="mt-1 text-[10px] text-amber-700 font-medium">
+                    * Pesanan Delivery hanya menerima pembayaran dompet digital atau transfer bank.
+                  </p>
+                )}
               </div>
+
+              {queuePayMethod === 'QRIS' && (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-3 text-center space-y-2">
+                  <span className="text-xs font-bold text-emerald-950 block">QRIS Dinamis Kasir (Simulasi)</span>
+                  <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-xl bg-white p-2 shadow-xs border border-emerald-200">
+                    <QrCode size={64} className="text-emerald-700" />
+                  </div>
+                  <p className="text-[10px] text-slate-500 font-medium">
+                    Pelanggan memindai QRIS melalui m-banking atau e-wallet.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setQueueQrisConfirmed(true)}
+                    className={`w-full py-1.5 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                      queueQrisConfirmed
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border border-emerald-300'
+                    }`}
+                  >
+                    <CheckCircle2 size={14} />
+                    {queueQrisConfirmed ? 'Pembayaran QRIS Berhasil Dikonfirmasi' : 'Konfirmasi Simulasi QRIS Berhasil'}
+                  </button>
+                </div>
+              )}
 
               {queuePayMethod === 'Tunai' && (
                 <div>
@@ -2313,11 +2873,15 @@ export default function Transaksi() {
                     onChange={(e) => setQueuePaidAmount(e.target.value)}
                     className="w-full rounded-xl border border-slate-200 p-2 text-xs font-bold outline-none focus:border-emerald-500"
                   />
-                  {Number(queuePaidAmount) >= payingOrder.total && (
+                  {Number(queuePaidAmount) >= payingOrder.total ? (
                     <div className="flex justify-between text-xs font-bold text-emerald-800 bg-emerald-50 p-2 rounded-lg mt-1 border border-emerald-200">
                       <span>Kembalian:</span>
                       <span>{formatRupiah(Number(queuePaidAmount) - payingOrder.total)}</span>
                     </div>
+                  ) : (
+                    <p className="mt-1 text-[11px] font-bold text-rose-600">
+                      Uang pembayaran kurang {formatRupiah(payingOrder.total - (Number(queuePaidAmount) || 0))}
+                    </p>
                   )}
                 </div>
               )}
@@ -2333,7 +2897,11 @@ export default function Transaksi() {
                 <button
                   type="button"
                   onClick={handleConfirmPayQueueOrder}
-                  className="rounded-xl bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-500"
+                  disabled={
+                    (queuePayMethod === 'Tunai' && Number(queuePaidAmount) < payingOrder.total) ||
+                    (queuePayMethod === 'QRIS' && !queueQrisConfirmed)
+                  }
+                  className="rounded-xl bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   Simpan &amp; Lunas
                 </button>
@@ -2409,15 +2977,16 @@ export default function Transaksi() {
                     </div>
 
                     <div>
-                      <label className="mb-1 block text-xs font-semibold text-slate-700">Nomor HP / WhatsApp *</label>
+                      <label className="mb-1 block text-xs font-semibold text-slate-700">Nomor HP / WhatsApp (Hanya Angka) *</label>
                       <input
                         required
                         type="tel"
                         value={deliveryPhone}
-                        onChange={(e) => setDeliveryPhone(e.target.value)}
-                        placeholder="cth: 0812-3456-7890"
-                        className="w-full rounded-xl border border-slate-200 bg-white py-2 px-3 text-xs outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                        onChange={(e) => setDeliveryPhone(e.target.value.replace(/\D/g, ''))}
+                        placeholder="cth: 081234567890 (angka saja)"
+                        className="w-full rounded-xl border border-slate-200 bg-white py-2 px-3 text-xs outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100 font-mono"
                       />
+                      <p className="text-[10px] text-slate-400 mt-1">Hanya angka (minimal 9 digit, tanpa huruf).</p>
                     </div>
 
                     <div className="sm:col-span-2">
@@ -2482,9 +3051,9 @@ export default function Transaksi() {
                       <input
                         type="tel"
                         value={deliveryCourierPhone}
-                        onChange={(e) => setDeliveryCourierPhone(e.target.value)}
-                        placeholder="cth: 0819-8765-4321"
-                        className="w-full rounded-xl border border-slate-200 bg-white py-2 px-3 text-xs outline-none focus:border-emerald-500"
+                        onChange={(e) => setDeliveryCourierPhone(e.target.value.replace(/\D/g, ''))}
+                        placeholder="cth: 081987654321 (angka saja)"
+                        className="w-full rounded-xl border border-slate-200 bg-white py-2 px-3 text-xs outline-none focus:border-emerald-500 font-mono"
                       />
                     </div>
 

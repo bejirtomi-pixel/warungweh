@@ -93,6 +93,8 @@ export default function Meja() {
   const [settleModalOpen, setSettleModalOpen] = useState(false);
   const [sessionToSettle, setSessionToSettle] = useState(null);
   const [settlePaymentMethod, setSettlePaymentMethod] = useState('Tunai');
+  const [settlePaidAmount, setSettlePaidAmount] = useState('');
+  const [settleQrisConfirmed, setSettleQrisConfirmed] = useState(false);
 
   // Toast
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
@@ -380,6 +382,18 @@ export default function Meja() {
   // Tutup Sesi Meja
   const handleOpenSettleModal = (session) => {
     setSessionToSettle(session);
+    setSettlePaymentMethod('Tunai');
+    setSettleQrisConfirmed(false);
+
+    const sOrders = orders.filter(
+      (o) => (session.orderIds || []).includes(o.id) && o.orderStatus !== 'cancelled' && o.orderStatus !== 'rejected'
+    );
+    const unpaid = sOrders.filter((o) => o.paymentStatus !== 'paid');
+    const remainingTotal = unpaid.length > 0
+      ? unpaid.reduce((sum, o) => sum + (Number(o.total) || 0), 0)
+      : (session.paymentStatus === 'paid' ? 0 : session.total);
+
+    setSettlePaidAmount(String(remainingTotal));
     setSettleModalOpen(true);
   };
 
@@ -404,12 +418,31 @@ export default function Meja() {
       return;
     }
 
+    const unpaid = sessionOrdersList.filter((o) => o.paymentStatus !== 'paid');
+    const remainingTotal = unpaid.length > 0
+      ? unpaid.reduce((sum, o) => sum + (Number(o.total) || 0), 0)
+      : (sessionToSettle.paymentStatus === 'paid' ? 0 : sessionToSettle.total);
+
+    const paidNum = Number(settlePaidAmount) || remainingTotal;
+
+    // Validasi Pembayaran Tunai
+    if (settlePaymentMethod === 'Tunai' && remainingTotal > 0 && paidNum < remainingTotal) {
+      showToast('Uang pembayaran tunai kurang dari sisa tagihan!', 'error');
+      return;
+    }
+
+    // Validasi Pembayaran QRIS
+    if (settlePaymentMethod === 'QRIS' && remainingTotal > 0 && !settleQrisConfirmed) {
+      showToast('Harap lakukan konfirmasi simulasi pembayaran QRIS terlebih dahulu.', 'error');
+      return;
+    }
+
     try {
       const res = closeTableSession(sessionToSettle.id, {
         paymentMethod: settlePaymentMethod,
         paymentCategory: settlePaymentMethod === 'Tunai' ? 'Tunai' : 'Digital',
-        paid: sessionToSettle.total,
-        change: 0,
+        paid: paidNum,
+        change: Math.max(0, paidNum - remainingTotal),
         kasir: currentUserDisplay || 'Kasir',
         kasirUid: currentStaff?.uid || 'KASIR',
       });
@@ -421,7 +454,33 @@ export default function Meja() {
 
       setSettleModalOpen(false);
       setDetailModalOpen(false);
+      setSettleQrisConfirmed(false);
       showToast(`Sesi "${sessionToSettle.tableName}" berhasil diselesaikan & meja kembali tersedia.`);
+    } catch (err) {
+      console.error(err);
+      showToast('Gagal menutup sesi meja.', 'error');
+    }
+  };
+
+  // Tutup langsung sesi meja yang sudah berstatus lunas tanpa minta bayar lagi (Cegah pembayaran ganda)
+  const handleDirectClosePaidSession = (session) => {
+    try {
+      const res = closeTableSession(session.id, {
+        paymentMethod: session.paymentMethod || 'Sudah Lunas',
+        paymentCategory: session.paymentCategory || 'Tunai',
+        paid: session.total,
+        change: 0,
+        kasir: currentUserDisplay || 'Kasir',
+        kasirUid: currentStaff?.uid || 'KASIR',
+      });
+
+      if (res?.success === false) {
+        showToast(res.reason || 'Gagal menutup sesi meja.', 'error');
+        return;
+      }
+
+      setDetailModalOpen(false);
+      showToast(`Meja "${session.tableName}" selesai & kembali tersedia (Sudah Lunas).`);
     } catch (err) {
       console.error(err);
       showToast('Gagal menutup sesi meja.', 'error');
@@ -1243,7 +1302,11 @@ export default function Meja() {
                       </div>
                       <div>
                         <span className="block text-slate-400 text-[10px]">Status Pembayaran</span>
-                        <span className="font-bold text-amber-700">
+                        <span className={`font-bold inline-block px-2 py-0.5 rounded-md ${
+                          session.paymentStatus === 'paid'
+                            ? 'text-emerald-800 bg-emerald-100 border border-emerald-200'
+                            : 'text-amber-800 bg-amber-100 border border-amber-200'
+                        }`}>
                           {session.paymentStatus === 'paid' ? 'LUNAS' : 'BELUM DIBAYAR'}
                         </span>
                       </div>
@@ -1376,14 +1439,25 @@ export default function Meja() {
 
                 {session && (
                   <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleOpenSettleModal(session)}
-                      className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-emerald-600/30 hover:bg-emerald-500 transition active:scale-98"
-                    >
-                      <CreditCard size={14} />
-                      Bayar &amp; Tutup Sesi
-                    </button>
+                    {session.paymentStatus === 'paid' ? (
+                      <button
+                        type="button"
+                        onClick={() => handleDirectClosePaidSession(session)}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-700 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-emerald-700/30 hover:bg-emerald-600 transition active:scale-98"
+                      >
+                        <CheckCircle2 size={14} />
+                        Selesaikan &amp; Kosongkan Meja (Sudah Lunas)
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenSettleModal(session)}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-emerald-600/30 hover:bg-emerald-500 transition active:scale-98"
+                      >
+                        <CreditCard size={14} />
+                        Bayar &amp; Tutup Sesi
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -1414,12 +1488,38 @@ export default function Meja() {
               </button>
             </div>
 
-            <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-4 text-center">
-              <span className="text-xs font-semibold text-emerald-800 block">Total Tagihan Sesi</span>
-              <span className="text-2xl font-black text-emerald-950 mt-1 block">
-                {formatRupiah(sessionToSettle.total)}
-              </span>
-            </div>
+            {/* Rincian Tagihan Sesi & Sisa Pelunasan */}
+            {(() => {
+              const sOrders = orders.filter(
+                (o) => (sessionToSettle.orderIds || []).includes(o.id) && o.orderStatus !== 'cancelled' && o.orderStatus !== 'rejected'
+              );
+              const unpaid = sOrders.filter((o) => o.paymentStatus !== 'paid');
+              const remainingTotal = unpaid.length > 0
+                ? unpaid.reduce((sum, o) => sum + (Number(o.total) || 0), 0)
+                : (sessionToSettle.paymentStatus === 'paid' ? 0 : sessionToSettle.total);
+              const alreadyPaid = sessionToSettle.total - remainingTotal;
+
+              return (
+                <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-4 space-y-1.5">
+                  <div className="flex justify-between text-xs text-slate-600">
+                    <span>Total Tagihan Sesi:</span>
+                    <span className="font-bold">{formatRupiah(sessionToSettle.total)}</span>
+                  </div>
+                  {alreadyPaid > 0 && (
+                    <div className="flex justify-between text-xs text-emerald-700">
+                      <span>Sudah Dibayar Terpisah:</span>
+                      <span className="font-bold">-{formatRupiah(alreadyPaid)}</span>
+                    </div>
+                  )}
+                  <div className="border-t border-emerald-200 pt-1.5 flex justify-between items-baseline">
+                    <span className="text-xs font-bold text-emerald-950">Sisa Tagihan Pelunasan:</span>
+                    <span className="text-2xl font-black text-emerald-950">
+                      {formatRupiah(remainingTotal)}
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
 
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1.5">
@@ -1427,7 +1527,10 @@ export default function Meja() {
               </label>
               <select
                 value={settlePaymentMethod}
-                onChange={(e) => setSettlePaymentMethod(e.target.value)}
+                onChange={(e) => {
+                  setSettlePaymentMethod(e.target.value);
+                  setSettleQrisConfirmed(false);
+                }}
                 className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-bold text-slate-800 outline-none focus:border-emerald-500"
               >
                 <option value="Tunai">Tunai (Cash)</option>
@@ -1442,6 +1545,66 @@ export default function Meja() {
               </select>
             </div>
 
+            {/* QRIS Simulation Card in Settle Modal */}
+            {settlePaymentMethod === 'QRIS' && (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3 text-center space-y-2">
+                <span className="text-xs font-bold text-emerald-950 block">QRIS Kasir Sesi Meja (Simulasi)</span>
+                <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-xl bg-white p-2 shadow-xs border border-emerald-200">
+                  <QrCode size={64} className="text-emerald-700" />
+                </div>
+                <p className="text-[10px] text-slate-500 font-medium">
+                  Pelanggan memindai QRIS kasir untuk melunasi tagihan sesi meja.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setSettleQrisConfirmed(true)}
+                  className={`w-full py-1.5 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                    settleQrisConfirmed
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border border-emerald-300'
+                  }`}
+                >
+                  <CheckCircle2 size={14} />
+                  {settleQrisConfirmed ? 'Pembayaran QRIS Berhasil Dikonfirmasi' : 'Konfirmasi Simulasi QRIS Berhasil'}
+                </button>
+              </div>
+            )}
+
+            {/* Cash Input in Settle Modal */}
+            {settlePaymentMethod === 'Tunai' && (() => {
+              const sOrders = orders.filter(
+                (o) => (sessionToSettle.orderIds || []).includes(o.id) && o.orderStatus !== 'cancelled' && o.orderStatus !== 'rejected'
+              );
+              const unpaid = sOrders.filter((o) => o.paymentStatus !== 'paid');
+              const remainingTotal = unpaid.length > 0
+                ? unpaid.reduce((sum, o) => sum + (Number(o.total) || 0), 0)
+                : (sessionToSettle.paymentStatus === 'paid' ? 0 : sessionToSettle.total);
+
+              return (
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Uang Diterima (Rp)
+                  </label>
+                  <input
+                    type="number"
+                    value={settlePaidAmount}
+                    onChange={(e) => setSettlePaidAmount(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 p-2.5 text-xs font-bold outline-none focus:border-emerald-500"
+                  />
+                  {Number(settlePaidAmount) >= remainingTotal ? (
+                    <div className="flex justify-between text-xs font-bold text-emerald-800 bg-emerald-50 p-2 rounded-xl border border-emerald-200">
+                      <span>Kembalian:</span>
+                      <span>{formatRupiah(Number(settlePaidAmount) - remainingTotal)}</span>
+                    </div>
+                  ) : (
+                    <p className="text-[11px] font-bold text-rose-600">
+                      Uang pembayaran kurang {formatRupiah(remainingTotal - (Number(settlePaidAmount) || 0))}
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
+
             <p className="text-[11px] text-slate-400 leading-relaxed">
               Setelah pembayaran selesai, seluruh pesanan sesi ditandai Lunas, meja otomatis berstatus Tersedia, dan transaksi tercatat pada laporan.
             </p>
@@ -1454,13 +1617,29 @@ export default function Meja() {
               >
                 Batal
               </button>
-              <button
-                type="button"
-                onClick={handleConfirmCloseSession}
-                className="rounded-xl bg-emerald-600 px-5 py-2 text-xs font-bold text-white shadow-md shadow-emerald-600/30 hover:bg-emerald-500"
-              >
-                Konfirmasi Lunas &amp; Tutup
-              </button>
+              {(() => {
+                const sOrders = orders.filter(
+                  (o) => (sessionToSettle.orderIds || []).includes(o.id) && o.orderStatus !== 'cancelled' && o.orderStatus !== 'rejected'
+                );
+                const unpaid = sOrders.filter((o) => o.paymentStatus !== 'paid');
+                const remainingTotal = unpaid.length > 0
+                  ? unpaid.reduce((sum, o) => sum + (Number(o.total) || 0), 0)
+                  : (sessionToSettle.paymentStatus === 'paid' ? 0 : sessionToSettle.total);
+
+                const isCashInvalid = settlePaymentMethod === 'Tunai' && remainingTotal > 0 && Number(settlePaidAmount) < remainingTotal;
+                const isQrisInvalid = settlePaymentMethod === 'QRIS' && remainingTotal > 0 && !settleQrisConfirmed;
+
+                return (
+                  <button
+                    type="button"
+                    onClick={handleConfirmCloseSession}
+                    disabled={isCashInvalid || isQrisInvalid}
+                    className="rounded-xl bg-emerald-600 px-5 py-2 text-xs font-bold text-white shadow-md shadow-emerald-600/30 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Konfirmasi Lunas &amp; Tutup
+                  </button>
+                );
+              })()}
             </div>
           </div>
         </div>

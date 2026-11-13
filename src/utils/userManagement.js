@@ -11,7 +11,7 @@ import {
 import { initializeApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signOut as secondarySignOut } from 'firebase/auth';
 import { db } from '../firebase.js';
-import { logActivity } from './activityLogger.js';
+import { logActivity, logAuditTrail } from './activityLogger.js';
 
 export const ROLES = {
   SUPER_ADMIN: 'SUPER_ADMIN',
@@ -25,12 +25,81 @@ export const USER_STATUS = {
   PENDING: 'pending',
   SUSPENDED: 'suspended',
   REJECTED: 'rejected',
+  BELUM_DITENTUKAN: 'belum_ditentukan',
 };
 
-// Akun Utama Resmi Berdasarkan Keputusan Sistem
+// 5 Akun Terdaftar di Firebase Authentication (Pertahankan seluruhnya)
+export const INITIAL_AUTH_ACCOUNTS = [
+  {
+    uid: 'user-superadmin-qurmacel',
+    id: 'user-superadmin-qurmacel',
+    email: 'qurmacel@gmail.com',
+    username: 'qurmacel',
+    displayName: 'Qurmacel',
+    role: ROLES.SUPER_ADMIN,
+    roleAlias: 'super_admin',
+    status: USER_STATUS.APPROVED,
+    statusAlias: 'active',
+    permissions: ['*'],
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+  {
+    uid: 'user-admin-default',
+    id: 'user-admin-default',
+    email: 'admin@gmail.com',
+    username: 'admin',
+    displayName: 'Admin Toko',
+    role: ROLES.ADMIN,
+    roleAlias: 'admin',
+    status: USER_STATUS.APPROVED,
+    statusAlias: 'active',
+    permissions: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+  {
+    uid: 'user-kasir-default',
+    id: 'user-kasir-default',
+    email: 'kasir@gmail.com',
+    username: 'kasir',
+    displayName: 'Kasir Toko',
+    role: ROLES.KASIR,
+    roleAlias: 'kasir',
+    status: USER_STATUS.APPROVED,
+    statusAlias: 'active',
+    permissions: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+  {
+    uid: 'user-legacy-qurma1',
+    id: 'user-legacy-qurma1',
+    email: 'qurma1@gmail.com',
+    username: 'qurma1',
+    displayName: 'qurma1',
+    role: 'belum_ditentukan',
+    roleAlias: 'belum_ditentukan',
+    status: 'belum_ditentukan',
+    statusAlias: 'belum_ditentukan',
+    permissions: [],
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+  {
+    uid: 'user-legacy-kasir-qurmacel',
+    id: 'user-legacy-kasir-qurmacel',
+    email: 'kasir@qurmacel.com',
+    username: 'kasir-qurmacel',
+    displayName: 'Kasir Qurmacel',
+    role: 'belum_ditentukan',
+    roleAlias: 'belum_ditentukan',
+    status: 'belum_ditentukan',
+    statusAlias: 'belum_ditentukan',
+    permissions: [],
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+];
+
 export const DEFAULT_SUPER_ADMIN_EMAILS = ['qurmacel@gmail.com'];
 export const DEFAULT_ADMIN_EMAILS = ['admin@gmail.com'];
-export const DEFAULT_CASHIER_EMAILS = ['kasir@gmail.com', 'kasir@qurmacel.com'];
+export const DEFAULT_CASHIER_EMAILS = ['kasir@gmail.com'];
 
 // Helper Status & Role Checking
 export function isAccountApproved(status) {
@@ -40,7 +109,7 @@ export function isAccountApproved(status) {
 }
 
 export function isAccountPending(status) {
-  if (!status) return true;
+  if (!status) return false;
   const s = String(status).toLowerCase().trim();
   return s === 'pending' || s === 'menunggu';
 }
@@ -57,12 +126,25 @@ export function isAccountRejected(status) {
   return s === 'rejected' || s === 'ditolak';
 }
 
+export function isAccountUndetermined(status) {
+  if (!status) return true;
+  const s = String(status).toLowerCase().trim();
+  return s === 'belum_ditentukan' || s === 'unknown' || s === 'unassigned';
+}
+
 export function normalizeRole(role) {
-  if (!role) return ROLES.KASIR;
+  if (!role) return 'belum_ditentukan';
   const r = String(role).toUpperCase().trim();
   if (r === 'SUPER_ADMIN' || r === 'SUPERADMIN' || r === 'OWNER') return ROLES.SUPER_ADMIN;
   if (r === 'ADMIN') return ROLES.ADMIN;
-  return ROLES.KASIR;
+  if (r === 'KASIR' || r === 'CASHIER') return ROLES.KASIR;
+  if (r === 'BELUM_DITENTUKAN' || r === 'NONE' || r === 'UNASSIGNED') return 'belum_ditentukan';
+  return 'belum_ditentukan';
+}
+
+export function isRoleAssigned(role) {
+  const r = normalizeRole(role);
+  return r === ROLES.SUPER_ADMIN || r === ROLES.ADMIN || r === ROLES.KASIR;
 }
 
 // Modul & Daftar Granular Permission
@@ -159,6 +241,9 @@ export const DEFAULT_PERMISSIONS = {
     'page.laporan',
     'page.informasi_barang',
     'page.riwayat_aktivitas',
+    'page.manajemen_pengguna',
+    'pengguna.view',
+    'pengguna.manage',
     'meja.view',
     'meja.qr_view',
     'meja.session_open',
@@ -211,11 +296,19 @@ export async function fetchUserProfile(uid) {
     const docRef = doc(db, 'app_users', uid);
     const snap = await getDoc(docRef);
     if (snap.exists()) {
-      return { id: snap.id, ...snap.data() };
+      return { id: snap.id, uid: snap.id, ...snap.data() };
     }
   } catch (err) {
     console.warn(`Gagal memuat profil pengguna (${uid}):`, err);
   }
+
+  // Fallback cache lokal
+  try {
+    const localUsers = JSON.parse(localStorage.getItem('qurmacel_all_users') || '[]');
+    const found = localUsers.find((u) => u.uid === uid || u.id === uid);
+    if (found) return found;
+  } catch {}
+
   return null;
 }
 
@@ -235,7 +328,7 @@ export async function saveUserProfile(uid, data) {
 }
 
 /**
- * Auto-bootstrap: Menjamin akun utama Super Admin dan Admin terkonfigurasi secara tepat dan langsung aktif
+ * Auto-bootstrap: Menjamin akun utama Super Admin, Admin, dan Kasir terkonfigurasi secara tepat
  */
 export async function bootstrapSuperAdmin(firebaseUser) {
   if (!firebaseUser?.uid) return null;
@@ -243,9 +336,9 @@ export async function bootstrapSuperAdmin(firebaseUser) {
   const email = (firebaseUser.email || '').toLowerCase().trim();
   const isDefaultSuper = email === 'qurmacel@gmail.com';
   const isDefaultAdmin = email === 'admin@gmail.com';
-  const isDefaultCashier = DEFAULT_CASHIER_EMAILS.includes(email);
+  const isDefaultCashier = email === 'kasir@gmail.com';
 
-  // Jika bukan akun utama, kembalikan profil dari database tanpa bootstrap khusus
+  // Jika bukan 3 akun sistem awal, kembalikan profil dari database tanpa bootstrap paksa
   if (!isDefaultSuper && !isDefaultAdmin && !isDefaultCashier) {
     return await fetchUserProfile(firebaseUser.uid);
   }
@@ -256,6 +349,7 @@ export async function bootstrapSuperAdmin(firebaseUser) {
   if (isDefaultSuper) {
     const superProfile = {
       uid: firebaseUser.uid,
+      id: firebaseUser.uid,
       email: 'qurmacel@gmail.com',
       username: 'qurmacel',
       displayName: existingProfile?.displayName || firebaseUser.displayName || 'qurmacel',
@@ -271,10 +365,11 @@ export async function bootstrapSuperAdmin(firebaseUser) {
       updatedAt: new Date().toISOString(),
     };
 
-    // Simpan ke Firestore secara asynchronous
-    saveUserProfile(firebaseUser.uid, superProfile).catch((err) => {
+    try {
+      await saveUserProfile(firebaseUser.uid, superProfile);
+    } catch (err) {
       console.warn('Gagal sinkron bootstrap Super Admin ke Firestore:', err);
-    });
+    }
 
     return superProfile;
   }
@@ -287,13 +382,14 @@ export async function bootstrapSuperAdmin(firebaseUser) {
 
     const adminProfile = {
       uid: firebaseUser.uid,
+      id: firebaseUser.uid,
       email: 'admin@gmail.com',
       username: 'admin',
       displayName: existingProfile?.displayName || firebaseUser.displayName || 'admin',
       photoURL: firebaseUser.photoURL || existingProfile?.photoURL || '',
       role: ROLES.ADMIN,
       roleAlias: 'admin',
-      status: USER_STATUS.APPROVED,
+      status: existingProfile?.status || USER_STATUS.APPROVED,
       statusAlias: 'active',
       permissions: adminPermissions,
       approvedAt: existingProfile?.approvedAt || new Date().toISOString(),
@@ -301,25 +397,27 @@ export async function bootstrapSuperAdmin(firebaseUser) {
       updatedAt: new Date().toISOString(),
     };
 
-    // Simpan ke Firestore secara asynchronous
-    saveUserProfile(firebaseUser.uid, adminProfile).catch((err) => {
+    try {
+      await saveUserProfile(firebaseUser.uid, adminProfile);
+    } catch (err) {
       console.warn('Gagal sinkron bootstrap Admin ke Firestore:', err);
-    });
+    }
 
     return adminProfile;
   }
 
-  // 3. Logika untuk KASIR UTAMA
+  // 3. Logika untuk KASIR AWAL (kasir@gmail.com)
   if (isDefaultCashier) {
     const cashierProfile = {
       uid: firebaseUser.uid,
-      email,
+      id: firebaseUser.uid,
+      email: 'kasir@gmail.com',
       username: 'kasir',
       displayName: existingProfile?.displayName || 'Kasir Toko',
       photoURL: firebaseUser.photoURL || existingProfile?.photoURL || '',
       role: ROLES.KASIR,
       roleAlias: 'kasir',
-      status: USER_STATUS.APPROVED,
+      status: existingProfile?.status || USER_STATUS.APPROVED,
       statusAlias: 'active',
       permissions: DEFAULT_PERMISSIONS[ROLES.KASIR],
       approvedAt: existingProfile?.approvedAt || new Date().toISOString(),
@@ -327,9 +425,11 @@ export async function bootstrapSuperAdmin(firebaseUser) {
       updatedAt: new Date().toISOString(),
     };
 
-    saveUserProfile(firebaseUser.uid, cashierProfile).catch((err) => {
+    try {
+      await saveUserProfile(firebaseUser.uid, cashierProfile);
+    } catch (err) {
       console.warn('Gagal sinkron bootstrap Kasir ke Firestore:', err);
-    });
+    }
 
     return cashierProfile;
   }
@@ -338,42 +438,89 @@ export async function bootstrapSuperAdmin(firebaseUser) {
 }
 
 /**
- * Mengambil seluruh daftar pengguna dari Firestore
+ * Mengambil seluruh daftar pengguna dari Firestore + Initial Accounts (5 Akun Terdaftar)
+ * JANGAN PERNAH MENEBAK ROLE jika role belum ditentukan.
  */
 export async function fetchAllUsers() {
   try {
-    const colRef = collection(db, 'app_users');
-    const snap = await getDocs(colRef);
-    const users = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    let firestoreUsers = [];
+    try {
+      const colRef = collection(db, 'app_users');
+      const snap = await getDocs(colRef);
+      firestoreUsers = snap.docs.map((d) => ({ id: d.id, uid: d.id, ...d.data() }));
+    } catch (err) {
+      console.warn('Gagal mengambil app_users dari Firestore (mungkin auth diperlukan):', err);
+    }
 
-    // Pastikan akun utama selalu muncul dengan peran dan status yang benar
-    return users.map((u) => {
+    // Merge dengan local storage cache
+    let localUsers = [];
+    try {
+      const raw = localStorage.getItem('qurmacel_all_users');
+      if (raw) localUsers = JSON.parse(raw);
+    } catch {}
+
+    const usersMap = new Map();
+
+    // 1. Masukkan 5 akun autentikasi awal sebagai baseline
+    INITIAL_AUTH_ACCOUNTS.forEach((acc) => {
+      usersMap.set(acc.email.toLowerCase(), {
+        ...acc,
+        permissions: acc.permissions || (acc.role && DEFAULT_PERMISSIONS[acc.role]) || [],
+      });
+    });
+
+    // 2. Timpa dengan localUsers jika ada perubahan yang tersimpan
+    localUsers.forEach((u) => {
+      const email = (u.email || '').toLowerCase().trim();
+      if (email) {
+        const prev = usersMap.get(email) || {};
+        usersMap.set(email, { ...prev, ...u });
+      }
+    });
+
+    // 3. Timpa dengan data Firestore yang terpercaya
+    firestoreUsers.forEach((u) => {
+      const email = (u.email || '').toLowerCase().trim();
+      if (email) {
+        const prev = usersMap.get(email) || {};
+        usersMap.set(email, { ...prev, ...u, uid: u.uid || u.id });
+      }
+    });
+
+    const merged = Array.from(usersMap.values());
+
+    // 4. Pastikan peran dan status dinormalisasi TANPA MENEBAK
+    return merged.map((u) => {
       const email = (u.email || '').toLowerCase().trim();
       if (email === 'qurmacel@gmail.com') {
         return {
           ...u,
+          uid: u.uid || 'user-superadmin-qurmacel',
           username: u.username || 'qurmacel',
+          displayName: u.displayName || 'Qurmacel',
           role: ROLES.SUPER_ADMIN,
           roleAlias: 'super_admin',
           status: USER_STATUS.APPROVED,
+          statusAlias: 'active',
           permissions: ['*'],
         };
       }
-      if (email === 'admin@gmail.com') {
-        return {
-          ...u,
-          username: u.username || 'admin',
-          role: ROLES.ADMIN,
-          roleAlias: 'admin',
-          status: USER_STATUS.APPROVED,
-          permissions: u.permissions?.length ? u.permissions : DEFAULT_PERMISSIONS[ROLES.ADMIN],
-        };
-      }
-      return u;
+
+      // Jangan menebak role jika tidak ada di profile
+      const rawRole = u.role;
+      const explicitRole = rawRole ? normalizeRole(rawRole) : 'belum_ditentukan';
+      const rawStatus = u.status;
+      const explicitStatus = rawStatus ? String(rawStatus).toLowerCase().trim() : 'belum_ditentukan';
+
+      return {
+        ...u,
+        role: explicitRole,
+        status: explicitStatus,
+      };
     });
   } catch (err) {
     console.warn('Gagal mengambil daftar pengguna:', err);
-    return [];
+    return INITIAL_AUTH_ACCOUNTS;
   }
 }
 
@@ -388,13 +535,16 @@ export async function fetchRegistrationRequests() {
     const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
     // Cross-check dengan app_users yang berstatus pending
-    const usersCol = collection(db, 'app_users');
-    const pendingUsersSnap = await getDocs(query(usersCol, where('status', '==', USER_STATUS.PENDING)));
-    const pendingUsers = pendingUsersSnap.docs.map((d) => ({
-      id: `REQ-${d.id}`,
-      uid: d.id,
-      ...d.data(),
-    }));
+    let pendingUsers = [];
+    try {
+      const usersCol = collection(db, 'app_users');
+      const pendingUsersSnap = await getDocs(query(usersCol, where('status', '==', USER_STATUS.PENDING)));
+      pendingUsers = pendingUsersSnap.docs.map((d) => ({
+        id: `REQ-${d.id}`,
+        uid: d.id,
+        ...d.data(),
+      }));
+    } catch {}
 
     const mergedMap = new Map();
     list.forEach((item) => mergedMap.set(item.uid, item));
@@ -412,11 +562,23 @@ export async function fetchRegistrationRequests() {
       }
     });
 
-    const result = Array.from(mergedMap.values());
+    // Merge dengan local storage cache
+    try {
+      const localReqs = JSON.parse(localStorage.getItem('qurmacel_registration_requests') || '[]');
+      if (Array.isArray(localReqs)) {
+        localReqs.forEach((lr) => {
+          if (lr?.uid) {
+            mergedMap.set(lr.uid, { ...(mergedMap.get(lr.uid) || {}), ...lr });
+          }
+        });
+      }
+    } catch {}
 
-    // PENTING: Filter out akun utama resmi agar tidak pernah muncul di antrean persetujuan
-    const PRIMARY_EMAILS = ['qurmacel@gmail.com', 'admin@gmail.com', ...DEFAULT_CASHIER_EMAILS];
-    const filteredRequests = result.filter(
+    const fullResult = Array.from(mergedMap.values()).filter((r) => r.status === USER_STATUS.PENDING);
+
+    // Filter out akun resmi sistem agar tidak masuk antrean persetujuan
+    const PRIMARY_EMAILS = ['qurmacel@gmail.com', 'admin@gmail.com', 'kasir@gmail.com'];
+    const filteredRequests = fullResult.filter(
       (r) => !PRIMARY_EMAILS.includes((r.email || '').toLowerCase().trim())
     );
 
@@ -424,19 +586,34 @@ export async function fetchRegistrationRequests() {
     return filteredRequests;
   } catch (err) {
     console.warn('Gagal mengambil antrean pendaftaran:', err);
-    return [];
+    try {
+      const localReqs = JSON.parse(localStorage.getItem('qurmacel_registration_requests') || '[]');
+      return Array.isArray(localReqs) ? localReqs.filter((r) => r.status === USER_STATUS.PENDING) : [];
+    } catch {
+      return [];
+    }
   }
 }
 
 /**
- * Super Admin menyetujui pendaftaran mandiri
+ * Super Admin atau Admin menyetujui pendaftaran mandiri
  */
 export async function approveRegistrationRequest(
   requestId,
   uid,
-  { role = ROLES.KASIR, permissions = null, approverUid, approverName }
+  { role = ROLES.KASIR, permissions = null, approverRole = ROLES.SUPER_ADMIN, approverUid, approverName }
 ) {
-  const finalPermissions = permissions || DEFAULT_PERMISSIONS[role] || DEFAULT_PERMISSIONS[ROLES.KASIR];
+  const normApproverRole = normalizeRole(approverRole);
+  if (normApproverRole === ROLES.KASIR) {
+    throw new Error('Kasir tidak memiliki wewenang untuk menyetujui akun.');
+  }
+
+  const assignedRole = normalizeRole(role);
+  if (normApproverRole === ROLES.ADMIN && assignedRole === ROLES.SUPER_ADMIN) {
+    throw new Error('Admin tidak memiliki wewenang untuk menetapkan peran Super Admin.');
+  }
+
+  const finalPermissions = permissions || (assignedRole === ROLES.SUPER_ADMIN ? ['*'] : DEFAULT_PERMISSIONS[assignedRole]) || [];
   const nowIso = new Date().toISOString();
 
   // 1. Coba verifikasi backend jika tersedia
@@ -448,8 +625,9 @@ export async function approveRegistrationRequest(
         action: 'approve',
         targetUid: uid,
         requestId,
-        role,
-        permissions: role === ROLES.SUPER_ADMIN ? ['*'] : finalPermissions,
+        role: assignedRole,
+        permissions: assignedRole === ROLES.SUPER_ADMIN ? ['*'] : finalPermissions,
+        approverRole: normApproverRole,
         approverUid,
         approverName,
       }),
@@ -459,35 +637,68 @@ export async function approveRegistrationRequest(
     }
   } catch {}
 
-  // 2. Direct Firestore update (Standard Client Flow)
-  await updateDoc(doc(db, 'app_users', uid), {
-    status: USER_STATUS.APPROVED,
-    statusAlias: 'active',
-    role,
-    permissions: role === ROLES.SUPER_ADMIN ? ['*'] : finalPermissions,
-    approvedAt: nowIso,
-    approvedBy: approverUid,
-    updatedAt: nowIso,
-  });
+  // 2. Direct Firestore update
+  try {
+    await setDoc(doc(db, 'app_users', uid), {
+      status: USER_STATUS.APPROVED,
+      statusAlias: 'active',
+      role: assignedRole,
+      permissions: assignedRole === ROLES.SUPER_ADMIN ? ['*'] : finalPermissions,
+      approvedAt: nowIso,
+      approvedBy: approverUid,
+      updatedAt: nowIso,
+    }, { merge: true });
+  } catch (err) {
+    console.warn('Gagal update app_users di Firestore:', err);
+  }
 
   if (requestId) {
     try {
-      await updateDoc(doc(db, 'registration_requests', requestId), {
+      await setDoc(doc(db, 'registration_requests', requestId), {
         status: 'approved',
         resolvedAt: nowIso,
         resolvedBy: approverUid,
-      });
+      }, { merge: true });
     } catch {}
   }
+
+  // Update local storage cache
+  try {
+    const localReqs = JSON.parse(localStorage.getItem('qurmacel_registration_requests') || '[]');
+    const updatedReqs = localReqs.map((r) =>
+      r.id === requestId || r.uid === uid ? { ...r, status: 'approved', role: assignedRole, permissions: finalPermissions } : r
+    );
+    localStorage.setItem('qurmacel_registration_requests', JSON.stringify(updatedReqs));
+
+    const localUsers = JSON.parse(localStorage.getItem('qurmacel_all_users') || '[]');
+    const updatedUsers = localUsers.map((u) =>
+      u.uid === uid ? { ...u, status: USER_STATUS.APPROVED, role: assignedRole, permissions: finalPermissions } : u
+    );
+    localStorage.setItem('qurmacel_all_users', JSON.stringify(updatedUsers));
+  } catch {}
 
   await logActivity({
     actorUid: approverUid,
     actorName: approverName,
-    actorRole: ROLES.SUPER_ADMIN,
+    actorRole: normApproverRole,
     action: 'USER_APPROVED',
     module: 'USER_MANAGEMENT',
     targetId: uid,
-    details: { assignedRole: role, permissionsCount: (role === ROLES.SUPER_ADMIN ? ['*'] : finalPermissions).length },
+    details: { assignedRole, permissionsCount: finalPermissions.length },
+    status: 'SUCCESS',
+  });
+
+  await logAuditTrail({
+    module: 'MANAJEMEN_PENGGUNA',
+    action: 'USER_APPROVED',
+    targetId: uid,
+    field: 'status & role',
+    before: { status: 'pending', role: null, permissions: [] },
+    after: { status: 'approved', role: assignedRole, permissions: finalPermissions },
+    actorUid: approverUid,
+    actorName: approverName,
+    actorRole: normApproverRole,
+    details: { note: `Pendaftaran disetujui sebagai ${assignedRole}` },
     status: 'SUCCESS',
   });
 
@@ -495,13 +706,18 @@ export async function approveRegistrationRequest(
 }
 
 /**
- * Super Admin menolak pendaftaran mandiri
+ * Super Admin atau Admin menolak pendaftaran mandiri
  */
 export async function rejectRegistrationRequest(
   requestId,
   uid,
-  { reason = 'Tidak memenuhi syarat', approverUid, approverName }
+  { reason = 'Tidak memenuhi syarat', approverRole = ROLES.SUPER_ADMIN, approverUid, approverName }
 ) {
+  const normApproverRole = normalizeRole(approverRole);
+  if (normApproverRole === ROLES.KASIR) {
+    throw new Error('Kasir tidak memiliki wewenang untuk menolak akun.');
+  }
+
   const nowIso = new Date().toISOString();
 
   // 1. Coba verifikasi backend jika tersedia
@@ -514,6 +730,7 @@ export async function rejectRegistrationRequest(
         targetUid: uid,
         requestId,
         reason,
+        approverRole: normApproverRole,
         approverUid,
         approverName,
       }),
@@ -523,35 +740,68 @@ export async function rejectRegistrationRequest(
     }
   } catch {}
 
-  // 2. Direct Firestore update (Standard Client Flow)
+  // 2. Direct Firestore update
   if (uid) {
-    await updateDoc(doc(db, 'app_users', uid), {
-      status: USER_STATUS.REJECTED,
-      rejectionReason: reason,
-      rejectedAt: nowIso,
-      rejectedBy: approverUid,
-      updatedAt: nowIso,
-    });
+    try {
+      await setDoc(doc(db, 'app_users', uid), {
+        status: USER_STATUS.REJECTED,
+        rejectionReason: reason,
+        rejectedAt: nowIso,
+        rejectedBy: approverUid,
+        updatedAt: nowIso,
+      }, { merge: true });
+    } catch (err) {
+      console.warn('Gagal update app_users rejection di Firestore:', err);
+    }
   }
 
   if (requestId) {
     try {
-      await updateDoc(doc(db, 'registration_requests', requestId), {
+      await setDoc(doc(db, 'registration_requests', requestId), {
         status: USER_STATUS.REJECTED,
         reason,
         resolvedAt: nowIso,
         resolvedBy: approverUid,
-      });
+      }, { merge: true });
     } catch {}
   }
+
+  // Update local storage cache
+  try {
+    const localReqs = JSON.parse(localStorage.getItem('qurmacel_registration_requests') || '[]');
+    const updatedReqs = localReqs.map((r) =>
+      r.id === requestId || r.uid === uid ? { ...r, status: USER_STATUS.REJECTED, rejectionReason: reason } : r
+    );
+    localStorage.setItem('qurmacel_registration_requests', JSON.stringify(updatedReqs));
+
+    const localUsers = JSON.parse(localStorage.getItem('qurmacel_all_users') || '[]');
+    const updatedUsers = localUsers.map((u) =>
+      u.uid === uid ? { ...u, status: USER_STATUS.REJECTED, rejectionReason: reason } : u
+    );
+    localStorage.setItem('qurmacel_all_users', JSON.stringify(updatedUsers));
+  } catch {}
 
   await logActivity({
     actorUid: approverUid,
     actorName: approverName,
-    actorRole: ROLES.SUPER_ADMIN,
+    actorRole: normApproverRole,
     action: 'USER_REJECTED',
     module: 'USER_MANAGEMENT',
     targetId: uid,
+    details: { reason },
+    status: 'SUCCESS',
+  });
+
+  await logAuditTrail({
+    module: 'MANAJEMEN_PENGGUNA',
+    action: 'USER_REJECTED',
+    targetId: uid,
+    field: 'status',
+    before: { status: 'pending' },
+    after: { status: 'rejected', reason },
+    actorUid: approverUid,
+    actorName: approverName,
+    actorRole: normApproverRole,
     details: { reason },
     status: 'SUCCESS',
   });
@@ -562,12 +812,27 @@ export async function rejectRegistrationRequest(
 /**
  * Menangguhkan akun pengguna (SUSPEND)
  */
-export async function suspendUser(targetUid, { reason = 'Akun ditangguhkan oleh Super Admin', updaterUid, updaterName }) {
+export async function suspendUser(
+  targetUid,
+  { reason = 'Akun ditangguhkan oleh Administrator', updaterRole = ROLES.SUPER_ADMIN, updaterUid, updaterName }
+) {
+  const normUpdaterRole = normalizeRole(updaterRole);
+  if (normUpdaterRole === ROLES.KASIR) {
+    throw new Error('Kasir tidak memiliki wewenang untuk menangguhkan akun pengguna.');
+  }
+
   const allUsers = await fetchAllUsers();
-  const targetUser = allUsers.find((u) => u.uid === targetUid);
+  const targetUser = allUsers.find((u) => u.uid === targetUid || u.id === targetUid);
+  const targetEmail = (targetUser?.email || '').toLowerCase().trim();
+
+  // Admin tidak boleh menangguhkan akun Super Admin
+  if (normUpdaterRole === ROLES.ADMIN) {
+    if (targetUser?.role === ROLES.SUPER_ADMIN || targetEmail === 'qurmacel@gmail.com') {
+      throw new Error('Admin tidak memiliki wewenang untuk menangguhkan akun Super Admin.');
+    }
+  }
 
   // Lindungi akun Super Admin utama dari penangguhan
-  const targetEmail = (targetUser?.email || '').toLowerCase().trim();
   if (targetEmail === 'qurmacel@gmail.com') {
     throw new Error('Akun Super Admin Utama (qurmacel@gmail.com) dilindungi dan tidak dapat ditangguhkan.');
   }
@@ -582,21 +847,48 @@ export async function suspendUser(targetUid, { reason = 'Akun ditangguhkan oleh 
   }
 
   const nowIso = new Date().toISOString();
-  await updateDoc(doc(db, 'app_users', targetUid), {
-    status: USER_STATUS.SUSPENDED,
-    suspensionReason: reason,
-    suspendedAt: nowIso,
-    suspendedBy: updaterUid,
-    updatedAt: nowIso,
-  });
+  try {
+    await updateDoc(doc(db, 'app_users', targetUid), {
+      status: USER_STATUS.SUSPENDED,
+      suspensionReason: reason,
+      suspendedAt: nowIso,
+      suspendedBy: updaterUid,
+      updatedAt: nowIso,
+    });
+  } catch (err) {
+    console.warn('Gagal updateDoc app_users di Firestore:', err);
+  }
+
+  // Update local storage cache
+  try {
+    const localUsers = JSON.parse(localStorage.getItem('qurmacel_all_users') || '[]');
+    const updatedUsers = localUsers.map((u) =>
+      u.uid === targetUid || u.id === targetUid ? { ...u, status: USER_STATUS.SUSPENDED, suspensionReason: reason } : u
+    );
+    localStorage.setItem('qurmacel_all_users', JSON.stringify(updatedUsers));
+  } catch {}
 
   await logActivity({
     actorUid: updaterUid,
     actorName: updaterName,
-    actorRole: ROLES.SUPER_ADMIN,
+    actorRole: normUpdaterRole,
     action: 'USER_SUSPENDED',
     module: 'USER_MANAGEMENT',
     targetId: targetUid,
+    details: { reason },
+    status: 'SUCCESS',
+  });
+
+  await logAuditTrail({
+    module: 'MANAJEMEN_PENGGUNA',
+    action: 'USER_SUSPENDED',
+    targetId: targetUid,
+    field: 'status',
+    before: { status: targetUser?.status || 'approved' },
+    after: { status: 'suspended', reason },
+    actorUid: updaterUid,
+    actorName: updaterName,
+    actorRole: normUpdaterRole,
     details: { reason },
     status: 'SUCCESS',
   });
@@ -607,30 +899,80 @@ export async function suspendUser(targetUid, { reason = 'Akun ditangguhkan oleh 
 /**
  * Mengaktifkan kembali akun yang ditangguhkan atau ditolak
  */
-export async function reactivateUser(targetUid, { role, permissions, updaterUid, updaterName }) {
-  const nowIso = new Date().toISOString();
-  const assignedPermissions = permissions || DEFAULT_PERMISSIONS[role] || DEFAULT_PERMISSIONS[ROLES.KASIR];
+export async function reactivateUser(
+  targetUid,
+  { role, permissions, updaterRole = ROLES.SUPER_ADMIN, updaterUid, updaterName }
+) {
+  const normUpdaterRole = normalizeRole(updaterRole);
+  if (normUpdaterRole === ROLES.KASIR) {
+    throw new Error('Kasir tidak memiliki wewenang untuk mengaktifkan akun pengguna.');
+  }
 
-  await updateDoc(doc(db, 'app_users', targetUid), {
-    status: USER_STATUS.APPROVED,
-    statusAlias: 'active',
-    role,
-    permissions: role === ROLES.SUPER_ADMIN ? ['*'] : assignedPermissions,
-    rejectionReason: null,
-    suspensionReason: null,
-    reactivatedAt: nowIso,
-    reactivatedBy: updaterUid,
-    updatedAt: nowIso,
-  });
+  const targetRole = normalizeRole(role);
+  if (normUpdaterRole === ROLES.ADMIN && targetRole === ROLES.SUPER_ADMIN) {
+    throw new Error('Admin tidak memiliki wewenang untuk menetapkan peran Super Admin.');
+  }
+
+  const nowIso = new Date().toISOString();
+  const assignedPermissions =
+    permissions || (targetRole === ROLES.SUPER_ADMIN ? ['*'] : DEFAULT_PERMISSIONS[targetRole]) || [];
+
+  try {
+    await updateDoc(doc(db, 'app_users', targetUid), {
+      status: USER_STATUS.APPROVED,
+      statusAlias: 'active',
+      role: targetRole,
+      permissions: targetRole === ROLES.SUPER_ADMIN ? ['*'] : assignedPermissions,
+      rejectionReason: null,
+      suspensionReason: null,
+      reactivatedAt: nowIso,
+      reactivatedBy: updaterUid,
+      updatedAt: nowIso,
+    });
+  } catch (err) {
+    console.warn('Gagal reactivateUser di Firestore:', err);
+  }
+
+  // Update local storage cache
+  try {
+    const localUsers = JSON.parse(localStorage.getItem('qurmacel_all_users') || '[]');
+    const updatedUsers = localUsers.map((u) =>
+      u.uid === targetUid || u.id === targetUid
+        ? {
+            ...u,
+            status: USER_STATUS.APPROVED,
+            role: targetRole,
+            permissions: assignedPermissions,
+            rejectionReason: null,
+            suspensionReason: null,
+          }
+        : u
+    );
+    localStorage.setItem('qurmacel_all_users', JSON.stringify(updatedUsers));
+  } catch {}
 
   await logActivity({
     actorUid: updaterUid,
     actorName: updaterName,
-    actorRole: ROLES.SUPER_ADMIN,
+    actorRole: normUpdaterRole,
     action: 'USER_REACTIVATED',
     module: 'USER_MANAGEMENT',
     targetId: targetUid,
-    details: { role, permissionsCount: assignedPermissions.length },
+    details: { role: targetRole, permissionsCount: assignedPermissions.length },
+    status: 'SUCCESS',
+  });
+
+  await logAuditTrail({
+    module: 'MANAJEMEN_PENGGUNA',
+    action: 'USER_REACTIVATED',
+    targetId: targetUid,
+    field: 'status',
+    before: { status: 'suspended' },
+    after: { status: 'approved', role: targetRole, permissions: assignedPermissions },
+    actorUid: updaterUid,
+    actorName: updaterName,
+    actorRole: normUpdaterRole,
+    details: { note: 'Akun diaktifkan kembali' },
     status: 'SUCCESS',
   });
 
@@ -640,18 +982,37 @@ export async function reactivateUser(targetUid, { role, permissions, updaterUid,
 /**
  * Memperbarui role dan granular permission pengguna
  */
-export async function updateUserRoleAndPermissions(targetUid, { role, permissions, updaterUid, updaterName }) {
+export async function updateUserRoleAndPermissions(
+  targetUid,
+  { role, permissions, updaterRole = ROLES.SUPER_ADMIN, updaterUid, updaterName }
+) {
+  const normUpdaterRole = normalizeRole(updaterRole);
+  if (normUpdaterRole === ROLES.KASIR) {
+    throw new Error('Kasir tidak memiliki wewenang untuk mengubah hak akses pengguna.');
+  }
+
   const allUsers = await fetchAllUsers();
-  const targetUser = allUsers.find((u) => u.uid === targetUid);
+  const targetUser = allUsers.find((u) => u.uid === targetUid || u.id === targetUid);
   const targetEmail = (targetUser?.email || '').toLowerCase().trim();
+  const newRole = normalizeRole(role);
+
+  // Admin tidak boleh mengubah akun Super Admin atau memberikan role Super Admin
+  if (normUpdaterRole === ROLES.ADMIN) {
+    if (targetUser?.role === ROLES.SUPER_ADMIN || targetEmail === 'qurmacel@gmail.com') {
+      throw new Error('Admin tidak memiliki wewenang untuk mengubah akun Super Admin.');
+    }
+    if (newRole === ROLES.SUPER_ADMIN) {
+      throw new Error('Admin tidak memiliki wewenang untuk memberikan peran Super Admin.');
+    }
+  }
 
   // Lindungi akun Super Admin utama agar tidak dapat diturunkan perannya
-  if (targetEmail === 'qurmacel@gmail.com' && role !== ROLES.SUPER_ADMIN) {
+  if (targetEmail === 'qurmacel@gmail.com' && newRole !== ROLES.SUPER_ADMIN) {
     throw new Error('Peran Super Admin Utama (qurmacel@gmail.com) dilindungi dan tidak dapat diubah.');
   }
 
   // Cegah mengubah jika pengguna adalah Super Admin terakhir
-  if (role !== ROLES.SUPER_ADMIN && targetUser?.role === ROLES.SUPER_ADMIN) {
+  if (newRole !== ROLES.SUPER_ADMIN && targetUser?.role === ROLES.SUPER_ADMIN) {
     const activeSuperAdmins = allUsers.filter(
       (u) => u.role === ROLES.SUPER_ADMIN && isAccountApproved(u.status) && u.uid !== targetUid
     );
@@ -660,22 +1021,58 @@ export async function updateUserRoleAndPermissions(targetUid, { role, permission
     }
   }
 
+  const finalPermissions = newRole === ROLES.SUPER_ADMIN ? ['*'] : (permissions || DEFAULT_PERMISSIONS[newRole] || []);
   const nowIso = new Date().toISOString();
-  await updateDoc(doc(db, 'app_users', targetUid), {
-    role,
-    permissions: role === ROLES.SUPER_ADMIN ? ['*'] : permissions,
-    updatedAt: nowIso,
-    updatedBy: updaterUid,
-  });
+
+  try {
+    await updateDoc(doc(db, 'app_users', targetUid), {
+      role: newRole,
+      permissions: finalPermissions,
+      updatedAt: nowIso,
+      updatedBy: updaterUid,
+    });
+  } catch (err) {
+    console.warn('Gagal updateUserRoleAndPermissions di Firestore:', err);
+  }
+
+  // Update local storage cache
+  try {
+    const localUsers = JSON.parse(localStorage.getItem('qurmacel_all_users') || '[]');
+    const updatedUsers = localUsers.map((u) =>
+      u.uid === targetUid || u.id === targetUid
+        ? {
+            ...u,
+            role: newRole,
+            permissions: finalPermissions,
+            updatedAt: nowIso,
+          }
+        : u
+    );
+    localStorage.setItem('qurmacel_all_users', JSON.stringify(updatedUsers));
+  } catch {}
 
   await logActivity({
     actorUid: updaterUid,
     actorName: updaterName,
-    actorRole: ROLES.SUPER_ADMIN,
+    actorRole: normUpdaterRole,
     action: 'PERMISSION_UPDATED',
     module: 'USER_MANAGEMENT',
     targetId: targetUid,
-    details: { newRole: role, permissionsCount: permissions.length },
+    details: { newRole, permissionsCount: finalPermissions.length },
+    status: 'SUCCESS',
+  });
+
+  await logAuditTrail({
+    module: 'MANAJEMEN_PENGGUNA',
+    action: 'USER_ROLE_PERMISSIONS_CHANGED',
+    targetId: targetUid,
+    field: 'role & permissions',
+    before: { role: targetUser?.role, permissions: targetUser?.permissions },
+    after: { role: newRole, permissions: finalPermissions },
+    actorUid: updaterUid,
+    actorName: updaterName,
+    actorRole: normUpdaterRole,
+    details: { note: `Peran dan granular permission diperbarui ke ${newRole}` },
     status: 'SUCCESS',
   });
 
@@ -683,7 +1080,7 @@ export async function updateUserRoleAndPermissions(targetUid, { role, permission
 }
 
 /**
- * Super Admin membuat akun pengguna baru secara terisolasi tanpa me-logout sesi aktif
+ * Super Admin atau Admin membuat akun pengguna baru secara terisolasi tanpa me-logout sesi aktif
  */
 export async function createUserIsolated({
   email,
@@ -691,9 +1088,34 @@ export async function createUserIsolated({
   displayName,
   role = ROLES.KASIR,
   permissions = null,
-  creatorUid,
-  creatorName,
+  status = USER_STATUS.APPROVED,
+  creatorRole = ROLES.SUPER_ADMIN,
+  creatorUid = 'SUPER_ADMIN',
+  creatorName = 'Super Admin',
 }) {
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  if (!cleanEmail) throw new Error('Email wajib diisi.');
+  if (!password || password.length < 6) throw new Error('Password minimal 6 karakter.');
+
+  // Validasi batas kewenangan
+  const normCreatorRole = normalizeRole(creatorRole);
+  const targetRole = normalizeRole(role);
+
+  if (normCreatorRole === ROLES.KASIR) {
+    throw new Error('Kasir tidak memiliki wewenang untuk membuat akun pengguna.');
+  }
+
+  if (normCreatorRole === ROLES.ADMIN && targetRole === ROLES.SUPER_ADMIN) {
+    throw new Error('Admin tidak memiliki wewenang untuk membuat akun Super Admin.');
+  }
+
+  // Cegah akun ganda jika email sudah terdaftar
+  const allUsers = await fetchAllUsers();
+  const existingUser = allUsers.find((u) => (u.email || '').toLowerCase().trim() === cleanEmail);
+  if (existingUser) {
+    throw new Error(`Email ${cleanEmail} sudah terdaftar di sistem.`);
+  }
+
   const firebaseConfig = {
     apiKey: 'AIzaSyDaXbPvELwyWgULzBVvHIRcOiqajyBqdGI',
     authDomain: 'warung-qurma.firebaseapp.com',
@@ -708,48 +1130,95 @@ export async function createUserIsolated({
   const secondaryAuth = getAuth(secondaryApp);
 
   try {
-    const cred = await createUserWithEmailAndPassword(secondaryAuth, email.trim(), password);
+    const cred = await createUserWithEmailAndPassword(secondaryAuth, cleanEmail, password);
     const newUid = cred.user.uid;
 
-    const assignedPermissions = permissions || DEFAULT_PERMISSIONS[role] || DEFAULT_PERMISSIONS[ROLES.KASIR];
+    const finalStatus = status === USER_STATUS.PENDING ? USER_STATUS.PENDING : USER_STATUS.APPROVED;
+    const isAppr = finalStatus === USER_STATUS.APPROVED;
+    const assignedPermissions =
+      permissions || (targetRole === ROLES.SUPER_ADMIN ? ['*'] : DEFAULT_PERMISSIONS[targetRole]) || [];
     const nowIso = new Date().toISOString();
 
     const newProfile = {
       uid: newUid,
-      email: email.trim(),
-      displayName: displayName.trim() || email.split('@')[0],
-      role,
-      status: USER_STATUS.APPROVED,
-      statusAlias: 'active',
-      permissions: role === ROLES.SUPER_ADMIN ? ['*'] : assignedPermissions,
+      id: newUid,
+      email: cleanEmail,
+      displayName: (displayName || '').trim() || cleanEmail.split('@')[0],
+      role: targetRole,
+      roleAlias: targetRole.toLowerCase(),
+      status: finalStatus,
+      statusAlias: isAppr ? 'active' : 'pending',
+      permissions: targetRole === ROLES.SUPER_ADMIN ? ['*'] : assignedPermissions,
       createdAt: nowIso,
       createdBy: creatorUid,
-      approvedAt: nowIso,
-      approvedBy: creatorUid,
+      creatorRole: normCreatorRole,
+      approvedAt: isAppr ? nowIso : null,
+      approvedBy: isAppr ? creatorUid : null,
     };
 
-    // Simpan ke Firestore
-    await setDoc(doc(db, 'app_users', newUid), newProfile);
+    // Simpan ke Firestore app_users/{uid} dengan UID yang persis sama
+    try {
+      await setDoc(doc(db, 'app_users', newUid), newProfile);
+    } catch (dbErr) {
+      console.warn('Gagal menyimpan app_users di Firestore (tersimpan di cache):', dbErr);
+    }
 
-    // Logout secondary app agar tidak ada session zombie
+    if (!isAppr) {
+      try {
+        await setDoc(doc(db, 'registration_requests', `REQ-${newUid}`), {
+          id: `REQ-${newUid}`,
+          uid: newUid,
+          email: cleanEmail,
+          displayName: newProfile.displayName,
+          method: 'Admin Provisioning',
+          requestedAt: nowIso,
+          status: USER_STATUS.PENDING,
+        });
+      } catch {}
+    }
+
+    // Logout secondary auth secara terisolasi tanpa memengaruhi auth utama
     await secondarySignOut(secondaryAuth);
 
-    // Log ke activity history
+    // Update local storage cache
+    try {
+      const localUsers = JSON.parse(localStorage.getItem('qurmacel_all_users') || '[]');
+      const filtered = localUsers.filter((u) => (u.email || '').toLowerCase().trim() !== cleanEmail);
+      filtered.push(newProfile);
+      localStorage.setItem('qurmacel_all_users', JSON.stringify(filtered));
+    } catch {}
+
+    // Catat ke riwayat aktivitas
     await logActivity({
       actorUid: creatorUid,
       actorName: creatorName,
-      actorRole: ROLES.SUPER_ADMIN,
+      actorRole: normCreatorRole,
       action: 'USER_CREATED',
       module: 'USER_MANAGEMENT',
       targetId: newUid,
-      details: { email: email.trim(), role, displayName: newProfile.displayName },
+      details: { email: cleanEmail, role: targetRole, status: finalStatus, displayName: newProfile.displayName },
+      status: 'SUCCESS',
+    });
+
+    await logAuditTrail({
+      module: 'MANAJEMEN_PENGGUNA',
+      action: 'USER_CREATED',
+      targetId: newUid,
+      field: 'user_account',
+      before: null,
+      after: { email: cleanEmail, role: targetRole, status: finalStatus },
+      actorUid: creatorUid,
+      actorName: creatorName,
+      actorRole: normCreatorRole,
+      details: { note: `Akun baru ${cleanEmail} dibuat oleh ${creatorName} (${normCreatorRole})` },
       status: 'SUCCESS',
     });
 
     return newProfile;
-  } finally {
-    try {
-      // Secondary auth cleanup
-    } catch {}
+  } catch (err) {
+    if (err.code === 'auth/email-already-in-use') {
+      throw new Error(`Email ${cleanEmail} sudah terdaftar di Firebase Authentication.`);
+    }
+    throw err;
   }
 }

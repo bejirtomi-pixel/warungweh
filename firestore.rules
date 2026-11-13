@@ -69,8 +69,8 @@ service cloud.firestore {
     // 1. App Users collection
     match /app_users/{userId} {
       allow read: if isOwner(userId) || isSuperAdmin() || isAdmin() || hasPermission('pengguna.view');
-      allow create: if isOwner(userId) || isSuperAdmin();
-      allow update: if isOwner(userId) || isSuperAdmin();
+      allow create: if isOwner(userId) || isSuperAdmin() || isAdmin();
+      allow update: if isOwner(userId) || isSuperAdmin() || isAdmin();
       allow delete: if isSuperAdmin() && request.auth.uid != userId;
     }
 

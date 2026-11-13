@@ -89,6 +89,7 @@ export default function App() {
             <Route path="/pending-approval" element={<PendingApproval />} />
             
             {/* QR Menu Pelanggan (Mendukung token stabil dan ID meja) */}
+            <Route path="/menu" element={<QrMenu />} />
             <Route path="/menu/:qrToken" element={<QrMenu />} />
             <Route path="/order/:qrToken" element={<QrMenu />} />
 

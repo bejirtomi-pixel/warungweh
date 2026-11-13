@@ -687,6 +687,24 @@ export default function InformasiBarang() {
                             <span className="font-bold text-emerald-700">{formatRupiah(p.harga)}</span>
                           </div>
 
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {p.availableServices?.includes('pickup') && (
+                              <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.2 text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                Pickup
+                              </span>
+                            )}
+                            {p.availableServices?.includes('dinein') && (
+                              <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.2 text-[9px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                Dine In
+                              </span>
+                            )}
+                            {p.availableServices?.includes('delivery') && (
+                              <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.2 text-[9px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                Delivery
+                              </span>
+                            )}
+                          </div>
+
                           {/* Catatan / Cuplikan Deskripsi */}
                           {isBS && m?.bestSellerNote && (
                             <p className="text-[11px] text-amber-800/90 italic">
